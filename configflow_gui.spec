@@ -12,11 +12,12 @@ ConfigFlowRegister GUI - PyInstaller 配置（带控制台日志）
 """
 
 block_cipher = None
+from PyInstaller.utils.hooks import collect_submodules
 
 
 a = Analysis(
     ['src/main.py'],
-    pathex=['.'],
+    pathex=['.', 'src'],
     binaries=[],
     datas=[
         ('config.json.template', '.'),
@@ -43,6 +44,15 @@ a = Analysis(
         'src.data',
         'src.data.data_manager',
         'src.models.account',
+        # 兼容非前缀导入（main.py 回退路径）
+        'utils',
+        'utils.logger',
+        'utils.exceptions',
+        'utils.config',
+        'utils.config_loader',
+        'utils.path',
+        'data',
+        'data.data_manager',
         # 依赖库
         'undetected_chromedriver',
         'selenium',
@@ -55,7 +65,7 @@ a = Analysis(
         'selenium.webdriver.support.expected_conditions',
         # Python <3.11 时的 tomli 解析
         'tomli',
-    ],
+    ] + collect_submodules('src'),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
