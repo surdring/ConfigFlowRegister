@@ -29,8 +29,8 @@ logs/
 *.log
 
 # App runtime data and progress
-data/
-data/**
+/data/
+/data/**
 registered_emails.txt
 
 # Test/coverage caches
