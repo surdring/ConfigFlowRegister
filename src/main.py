@@ -12,17 +12,17 @@ import sys
 # 确保导入路径正确（支持打包和开发环境）
 try:
     # 开发环境 - 使用相对导入
-    from utils.logger import setup_logger
-    from utils import config as app_config
-    from data.data_manager import Configuration, DataManager
-    from utils.exceptions import ValidationError
+    from src.utils.logger import setup_logger
+    from src.utils import config as app_config
+    from src.data.data_manager import Configuration, DataManager
+    from src.utils.exceptions import ValidationError
 except (ImportError, ValueError):
     # PyInstaller打包环境 - 使用绝对导入
     try:
-        from src.utils.logger import setup_logger
-        from src.utils import config as app_config
-        from src.data.data_manager import Configuration, DataManager
-        from src.utils.exceptions import ValidationError
+        from utils.logger import setup_logger
+        from utils import config as app_config
+        from data.data_manager import Configuration, DataManager
+        from utils.exceptions import ValidationError
     except ImportError:
         # 最后尝试添加路径
         import sys
