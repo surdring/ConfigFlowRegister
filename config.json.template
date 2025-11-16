@@ -1,0 +1,29 @@
+{
+  "email": {
+    "address": "your_email@qq.com",
+    "password": "your_app_specific_password",
+    "imap_server": "imap.qq.com",
+    "imap_port": 993,
+    "sender_pattern": "noreply@windsurf.com",
+    "subject_keywords": ["windsurf", "verification", "verify"],
+    "time_window_seconds": 300
+  },
+  "registration": {
+    "default_count": 10,
+    "interval_seconds": 5,
+    "browser_type": "chrome",
+    "headless": false,
+    "timeout_seconds": 30,
+    "max_retries": 3,
+    "domain": "yaoshangxian.top",
+    "url": "https://windsurf.com/account/register",
+    "password": "xqxatcdj1014"
+  },
+  "flow": {
+    "file": "flows/windsurf_register.toml"
+  },
+  "export": {
+    "format": "csv",
+    "include_failed": false
+  }
+}

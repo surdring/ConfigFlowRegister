@@ -1,0 +1,65 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+.env.*
+
+# Packaging / build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+.wheelhouse/
+
+# PyInstaller
+# (Keep .spec files tracked for reproducible builds)
+# *.spec  <-- DO NOT ignore .spec files
+*.manifest
+
+# Logs and runtime data
+logs/
+*.log
+
+# App runtime data and progress
+data/
+data/**
+registered_emails.txt
+
+# Test/coverage caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.cache/
+
+# Local config (template is tracked; real config is local)
+config.json
+
+# Exported results
+windsurf-*.json
+
+# OS / IDE junk
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.code-workspace
+.windsurf
+
+# Project docs and optional directories
+tests/
+openspec/
+old-py/
+docs/
+
+# Misc
+~$*

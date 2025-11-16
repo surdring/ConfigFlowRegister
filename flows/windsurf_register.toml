@@ -1,0 +1,88 @@
+[flow]
+name = "WindSurf Register (MVP)"
+start_url = "https://windsurf.com/account/register"
+timeout_ms = 10000
+
+[selectors.email]
+by = "id"
+value = "email"
+
+[selectors.first_name]
+by = "id"
+value = "firstName"
+
+[selectors.last_name]
+by = "id"
+value = "lastName"
+
+[selectors.terms]
+by = "id"
+value = "terms"
+
+[selectors.continue_btn]
+by = "xpath"
+value = "//button[contains(text(), 'Continue')]"
+
+[selectors.password]
+by = "id"
+value = "password"
+
+[selectors.password_confirm]
+by = "id"
+value = "passwordConfirmation"
+
+[[steps]]
+action = "navigate"
+
+[[steps]]
+action = "wait"
+target = "email"
+state = "present"
+
+[[steps]]
+action = "type"
+target = "first_name"
+value = "{account.first_name}"
+optional = true
+
+[[steps]]
+action = "type"
+target = "last_name"
+value = "{account.last_name}"
+optional = true
+
+[[steps]]
+action = "type"
+target = "email"
+value = "{account.email}"
+
+[[steps]]
+action = "click"
+target = "terms"
+
+[[steps]]
+action = "click"
+target = "continue_btn"
+
+[[steps]]
+action = "wait"
+target = "password"
+state = "visible"
+
+[[steps]]
+action = "type"
+target = "password"
+value = "{account.password}"
+
+[[steps]]
+action = "type"
+target = "password_confirm"
+value = "{account.password}"
+
+[[steps]]
+action = "click"
+target = "continue_btn"
+
+[[steps]]
+action = "pause_for_manual"
+message = "请完成人机验证后点击 GUI 的 '手动继续'"
