@@ -26,7 +26,7 @@ def get_default_config() -> Dict[str, Any]:
             "imap_server": "imap.qq.com",
             "imap_port": 993,
             "sender_pattern": "noreply@windsurf.com",
-            "subject_keywords": ["windsurf", "verification", "verify"],
+            "subject_keywords": ["windsurf", "verify"],
             "time_window_seconds": 300
         },
         "registration": {
