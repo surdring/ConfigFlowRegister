@@ -12,6 +12,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional
 import logging
+import os
 
 # 导入模块（支持开发环境和PyInstaller打包）
 try:
@@ -377,6 +378,17 @@ class MainWindow:
         self.count_spinbox.grid(row=1, column=1, sticky=tk.W, pady=2, padx=5)
         self.count_spinbox.set(self.config.registration.default_count)
         
+        # 邮箱加密强密码（CONFIGFLOW_EMAIL_SECRET_KEY）
+        ttk.Label(config_frame, text="邮箱强密码(加密密钥):").grid(row=2, column=0, sticky=tk.W, pady=2)
+        self.secret_var = tk.StringVar()
+        self.secret_entry = ttk.Entry(
+            config_frame,
+            textvariable=self.secret_var,
+            show="*",
+            width=30,
+        )
+        self.secret_entry.grid(row=2, column=1, sticky=tk.W, pady=2, padx=5, columnspan=2)
+        
         # 控制按钮区域
         control_frame = ttk.Frame(self.root, padding=10)
         control_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -511,6 +523,12 @@ class MainWindow:
             if errors:
                 messagebox.showerror("配置错误", "\n".join(errors))
                 return
+            
+            # 根据界面输入设置邮箱加密强密码环境变量（仅当前进程生效）
+            secret = self.secret_var.get().strip() if hasattr(self, "secret_var") else ""
+            if secret:
+                os.environ["CONFIGFLOW_EMAIL_SECRET_KEY"] = secret
+                self.log_message("已设置邮箱加密强密码（仅当前运行有效）", "INFO")
             
             self.log_message(f"开始生成{count}个账号...", "INFO")
             
