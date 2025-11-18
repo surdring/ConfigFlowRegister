@@ -22,6 +22,7 @@ try:
     from ..engine.flow_engine import FlowLoader, FlowRunner
     from ..browser.provider import BrowserProvider
     from ..utils import config as app_config
+    from ..utils.email_otp_fetcher import build_and_fetch_from_dict
 except (ImportError, ValueError):
     # PyInstaller打包环境 - 使用绝对导入
     try:
@@ -31,6 +32,7 @@ except (ImportError, ValueError):
         from src.engine.flow_engine import FlowLoader, FlowRunner
         from src.browser.provider import BrowserProvider
         from src.utils import config as app_config
+        from src.utils.email_otp_fetcher import build_and_fetch_from_dict
     except ImportError:
         # 最后尝试添加路径
         import sys
@@ -147,13 +149,21 @@ class RegistrationWorker(threading.Thread):
             })
             
             # 定义验证码接收回调
-            def on_verification_code(code):
-                """验证码接收回调，在GUI中显示"""
-                self.message_queue.put({
-                    "type": "log",
-                    "message": f"📧 收到验证码: {code}",
-                    "level": "SUCCESS"
-                })
+            def on_verification_code(code: str):
+                """验证码接收回调，在GUI中显示并记录账号+验证码"""
+                try:
+                    self.message_queue.put({
+                        "type": "log",
+                        "message": f"📧 账号{account.id}({account.email})收到验证码: {code}",
+                        "level": "INFO",
+                    })
+                    self.message_queue.put({
+                        "type": "otp",
+                        "account_email": getattr(account, "email", None),
+                        "code": code,
+                    })
+                except Exception:
+                    pass
             
             # 为每个账号创建新的浏览器实例
             self.message_queue.put({
@@ -161,6 +171,28 @@ class RegistrationWorker(threading.Thread):
                 "message": f"🌐 启动新的浏览器实例（账号{account.id}）...",
                 "level": "INFO"
             })
+
+            # 启动独立线程监听该账号的验证码邮件（使用配置中的 OTP 邮箱）
+            otp_thread = None
+            try:
+                email_cfg_dict = (self._config_dict or {}).get("email", {})
+                if isinstance(email_cfg_dict, dict) and email_cfg_dict.get("address") and email_cfg_dict.get("password"):
+                    def _stop_flag() -> bool:
+                        return self.stop_event.is_set()
+
+                    otp_thread = threading.Thread(
+                        target=build_and_fetch_from_dict,
+                        args=(email_cfg_dict, getattr(account, "email", None), on_verification_code, _stop_flag),
+                        daemon=True,
+                    )
+                    otp_thread.start()
+                    self.message_queue.put({
+                        "type": "log",
+                        "message": f"🔍 已为账号{account.id}启动验证码监听线程",
+                        "level": "INFO",
+                    })
+            except Exception as e:
+                logger.warning(f"启动账号{account.id}的验证码监听失败: {e}")
             
             # 使用配置驱动引擎执行（navigate → ... → pause_for_manual）
             driver = None
@@ -308,6 +340,7 @@ class MainWindow:
         self.manual_continue_event = threading.Event()
         self.worker_thread: Optional[threading.Thread] = None
         self.current_task: Optional[RegistrationTask] = existing_task
+        self.current_otp_account_email: Optional[str] = None
         
         # 将全局日志转发到 GUI 日志面板（仅挂到 root，避免重复）
         try:
@@ -414,6 +447,29 @@ class MainWindow:
             font=("Arial", 9)
         )
         self.stats_label.pack(anchor=tk.W)
+
+        # 当前注册账号验证码显示与复制
+        otp_frame = ttk.Frame(progress_frame)
+        otp_frame.pack(fill=tk.X, pady=2)
+
+        ttk.Label(otp_frame, text="当前账号验证码:").pack(side=tk.LEFT)
+        self.current_otp_var = tk.StringVar()
+        self.current_otp_entry = ttk.Entry(
+            otp_frame,
+            textvariable=self.current_otp_var,
+            width=40,
+            state="readonly",
+        )
+        self.current_otp_entry.pack(side=tk.LEFT, padx=5)
+
+        self.copy_otp_button = ttk.Button(
+            otp_frame,
+            text="复制验证码",
+            command=self.copy_current_otp,
+            state=tk.DISABLED,
+            width=12,
+        )
+        self.copy_otp_button.pack(side=tk.LEFT, padx=5)
         
         # 日志面板
         log_frame = ttk.LabelFrame(self.root, text="日志", padding=10)
@@ -645,6 +701,17 @@ class MainWindow:
                 elif msg_type == "log":
                     self.log_message(message["message"], message.get("level", "INFO"))
                 
+                elif msg_type == "otp":
+                    code = message.get("code") or ""
+                    account_email = message.get("account_email") or None
+                    self.current_otp_account_email = account_email
+                    self.current_otp_var.set(code)
+                    # 根据是否有验证码启用/禁用复制按钮
+                    if code:
+                        self.copy_otp_button.config(state=tk.NORMAL)
+                    else:
+                        self.copy_otp_button.config(state=tk.DISABLED)
+                
                 elif msg_type == "account_completed":
                     if self.current_task:
                         self.update_stats(
@@ -679,6 +746,28 @@ class MainWindow:
         
         # 每100ms检查一次队列
         self.root.after(100, self.check_message_queue)
+    
+    def copy_current_otp(self):
+        """复制当前账号验证码到剪贴板，并在日志中记录"""
+        code = self.current_otp_var.get() if hasattr(self, "current_otp_var") else ""
+        if not code:
+            messagebox.showwarning("提示", "当前没有可复制的验证码")
+            return
+
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(code)
+            self.root.update()  # 确保剪贴板内容持久
+        except Exception as e:
+            logger.warning(f"复制验证码到剪贴板失败: {e}")
+            messagebox.showerror("错误", f"复制验证码失败: {e}")
+            return
+
+        # 在 GUI 日志中提示已复制
+        if self.current_otp_account_email:
+            self.log_message(f"已复制账号 {self.current_otp_account_email} 的验证码", "INFO")
+        else:
+            self.log_message("已复制当前验证码", "INFO")
     
     def _start_queue_check(self):
         """启动队列检查"""

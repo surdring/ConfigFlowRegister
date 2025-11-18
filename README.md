@@ -114,6 +114,61 @@ python -m src.cli --flow flows/windsurf_register.toml --count 3 --interval 2
   - 无头模式（headless）下验证码通过率很低，建议关闭 headless。
   - Linux 无桌面时可用 `xvfb-run` 提供虚拟显示，但仍建议有头运行以提高通过率。
 
+## 邮箱验证码与加密配置
+
+- **OTP 邮箱角色**
+  - `config.json` 中的 `email` 段配置的是**收取验证码的专用邮箱**（例如 QQ 邮箱），
+    而不是注册用的 `@yaoshangxian.top` 账号。
+  - 程序会在注册开始时，通过 IMAP 轮询该 OTP 邮箱，按邮件主题和收件人匹配当前注册账号的验证码邮件。
+
+- **加密存储邮箱账号和授权码**
+  - 模板 `config.json.template` 中的示例：
+    ```json
+    "email": {
+      "address": "enc:your_encrypted_email_here",
+      "password": "enc:your_encrypted_app_password_here",
+      ...
+    }
+    ```
+  - 实际使用时：
+    1. 在运行环境设置加密密钥（以 Windows PowerShell 为例）：
+       ```powershell
+       $env:CONFIGFLOW_EMAIL_SECRET_KEY="你的强密码"
+       ```
+       Linux/macOS：
+       ```bash
+       export CONFIGFLOW_EMAIL_SECRET_KEY="你的强密码"
+       ```
+    2. 使用一行命令直接生成加密后的邮箱地址和授权码：
+       - Windows PowerShell：
+         ```powershell
+         python -c "from src.utils.email_crypto import encrypt_email_secret as enc; print(enc('your_email@qq.com'))"
+         python -c "from src.utils.email_crypto import encrypt_email_secret as enc; print(enc('ofumbhmnvzkzcbaa'))"
+         ```
+       - Linux/macOS：
+         ```bash
+         python -c "from src.utils.email_crypto import encrypt_email_secret as enc; print(enc('your_email@qq.com'))"
+         python -c "from src.utils.email_crypto import encrypt_email_secret as enc; print(enc('your_app_specific_password'))"
+         ```
+    3. 也可以在 Python 交互环境中调用：
+       ```python
+       from src.utils.email_crypto import encrypt_email_secret
+
+       encrypt_email_secret("your_email@qq.com")
+       encrypt_email_secret("your_app_specific_password")
+       ```
+    4. 将上面命令打印出来的 `enc:...` 文本分别填入 `email.address` 和 `email.password`。
+  - 运行时会自动解密到内存中用于 IMAP 登录，**不会**把明文写回配置文件或日志。
+  - 若仍使用明文地址/密码（不以 `enc:` 开头），系统也能工作，但不推荐在生产环境中使用。
+
+- **GUI 中的验证码显示与复制**
+  - 当为某个账号成功拉取到验证码（例如主题 `604688 - Verify your Email with Windsurf`），日志会输出：
+    `📧 账号{id}({email})收到验证码: 604688`。
+  - GUI “进度”区域下方会显示“当前账号验证码”，并启用“复制验证码”按钮。
+  - 点击“复制验证码”后：
+    - 验证码会被写入系统剪贴板；
+    - 日志会记录“已复制账号 {email} 的验证码”。
+
 ## 打包构建（PyInstaller）
 
 - **准备环境**

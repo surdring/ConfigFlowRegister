@@ -147,8 +147,9 @@ def _validate_config(config: Dict[str, Any]) -> None:
     # 验证email配置（允许空值，用户可以在GUI中填写；缺失email段也允许）
     if "email" in config:
         email_config = config["email"]
-        # 只在有值时验证格式
-        if email_config.get("address") and "@" not in email_config.get("address", ""):
+        # 只在有值时验证格式；若以 "enc:" 开头则视为加密值，不做 '@' 校验
+        addr = str(email_config.get("address", "") or "")
+        if addr and not addr.startswith("enc:") and "@" not in addr:
             errors.append("email.address格式无效")
     
     # 验证 registration 段（必需）

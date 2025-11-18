@@ -13,6 +13,15 @@ import subprocess
 import random
 import string
 
+try:
+    # 邮箱凭据加解密工具（用于在运行时解密配置中的加密邮箱地址/密码）
+    from ..utils.email_crypto import decrypt_email_secret
+except Exception:  # pragma: no cover - 打包路径回退
+    try:
+        from src.utils.email_crypto import decrypt_email_secret  # type: ignore
+    except Exception:
+        decrypt_email_secret = lambda v: v  # type: ignore
+
 # 使用相对导入（支持PyInstaller打包）
 try:
     from ..utils.logger import default_logger as logger
@@ -101,10 +110,24 @@ class Configuration:
         # 兼容缺失或不完整的 email 配置
         if not isinstance(email_data, dict):
             email_data = {}
+
+        # 允许在配置文件中以加密形式保存 address/password，运行时解密后再使用
+        raw_address = email_data.get("address", "")
+        raw_password = email_data.get("password", "")
+        try:
+            decrypted_address = decrypt_email_secret(raw_address)
+        except Exception:
+            decrypted_address = raw_address or ""
+        try:
+            decrypted_password = decrypt_email_secret(raw_password)
+        except Exception:
+            decrypted_password = raw_password or ""
+
         email_defaults = {
-            "address": email_data.get("address", ""),
-            "password": email_data.get("password", ""),
+            "address": decrypted_address,
+            "password": decrypted_password,
         }
+
         # 其余可选项由 EmailConfig 的默认值提供
         safe_email = {**email_data, **email_defaults}
         

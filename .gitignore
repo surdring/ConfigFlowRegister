@@ -41,7 +41,7 @@ htmlcov/
 .cache/
 
 # Local config (template is tracked; real config is local)
-config.json
+# config.json
 
 # Exported results
 windsurf-*.json
@@ -53,7 +53,7 @@ desktop.ini
 .idea/
 .vscode/
 *.code-workspace
-.windsurf
+.windsurf/
 
 # Project docs and optional directories
 tests/
