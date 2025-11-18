@@ -145,9 +145,11 @@ class Configuration:
         """
         errors = []
         
-        # 邮箱配置验证（允许空值，只在有值时验证格式）
-        if self.email.address and "@" not in self.email.address:
-            errors.append("邮箱地址格式无效")
+        # 邮箱配置验证（允许空值；若为加密形式 enc:...，在解密阶段再验证）
+        if self.email.address:
+            addr = self.email.address
+            if not addr.startswith("enc:") and "@" not in addr:
+                errors.append("邮箱地址格式无效")
         # 密码允许为空，用户在GUI中填写
         
         # 注册配置验证
