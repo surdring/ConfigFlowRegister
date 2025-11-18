@@ -65,10 +65,7 @@ class EmailConfig:
     password: str                   # 授权码
     imap_server: str = "imap.qq.com"
     imap_port: int = 993
-    
-    # 验证邮件识别策略
-    sender_pattern: str = "noreply@windsurf.com"
-    subject_keywords: List[str] = field(default_factory=lambda: ["windsurf", "verification", "verify"])
+    subject_keywords: List[str] = field(default_factory=lambda: ["windsurf", "verify"])
     time_window_seconds: int = 300  # 5分钟
 
 

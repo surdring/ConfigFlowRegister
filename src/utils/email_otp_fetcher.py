@@ -26,7 +26,6 @@ class OtpMailboxConfig:
     password: str
     imap_server: str
     imap_port: int
-    sender_pattern: str
     subject_keywords: list[str]
     time_window_seconds: int
 
@@ -68,7 +67,6 @@ def _build_mailbox_config(raw_cfg: dict) -> Optional[OtpMailboxConfig]:
         password=password,
         imap_server=raw_cfg.get("imap_server") or "imap.qq.com",
         imap_port=int(raw_cfg.get("imap_port") or 993),
-        sender_pattern=raw_cfg.get("sender_pattern") or "",
         subject_keywords=list(raw_cfg.get("subject_keywords") or []),
         time_window_seconds=int(raw_cfg.get("time_window_seconds") or 300),
     )
