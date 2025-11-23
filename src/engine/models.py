@@ -23,6 +23,8 @@ ActionName = Literal[
     "sleep",
     "expect",
     "pause_for_manual",
+    "wait_otp",
+    "wait_onboarding_source",
 ]
 
 
@@ -52,7 +54,17 @@ class Step:
     message: Optional[str] = None
 
     def __post_init__(self) -> None:
-        valid_actions = {"navigate", "wait", "type", "click", "sleep", "expect", "pause_for_manual"}
+        valid_actions = {
+            "navigate",
+            "wait",
+            "type",
+            "click",
+            "sleep",
+            "expect",
+            "pause_for_manual",
+            "wait_otp",
+            "wait_onboarding_source",
+        }
         if self.action not in valid_actions:
             raise ValidationError(f"不支持的 action: {self.action}")
 

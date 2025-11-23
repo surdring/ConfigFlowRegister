@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Optional
 import logging
 import os
+import time
 
 # 导入模块（支持开发环境和PyInstaller打包）
 try:
@@ -20,7 +21,10 @@ try:
     from ..data.data_manager import Configuration, DataManager, RegistrationTask
     from ..models.account import Account
     from ..utils.logger import default_logger as logger
-    from ..engine.flow_engine import FlowLoader, FlowRunner
+    from ..engine.flow_engine import (
+        FlowLoader,
+        FlowRunner,
+    )
     from ..browser.provider import BrowserProvider
     from ..utils import config as app_config
     from ..utils.email_otp_fetcher import build_and_fetch_from_dict
@@ -30,7 +34,10 @@ except (ImportError, ValueError):
         from src.data.data_manager import Configuration, DataManager, RegistrationTask
         from src.models.account import Account
         from src.utils.logger import default_logger as logger
-        from src.engine.flow_engine import FlowLoader, FlowRunner
+        from src.engine.flow_engine import (
+            FlowLoader,
+            FlowRunner,
+        )
         from src.browser.provider import BrowserProvider
         from src.utils import config as app_config
         from src.utils.email_otp_fetcher import build_and_fetch_from_dict
@@ -149,10 +156,13 @@ class RegistrationWorker(threading.Thread):
                 "level": "INFO"
             })
             
-            # 定义验证码接收回调
+            # 定义验证码接收回调（通过 shared dict 在 FlowRunner 与 GUI 之间共享验证码）
+            verification_holder = {"code": None}
+
             def on_verification_code(code: str):
                 """验证码接收回调，在GUI中显示并记录账号+验证码"""
                 try:
+                    verification_holder["code"] = code
                     self.message_queue.put({
                         "type": "log",
                         "message": f"📧 账号{account.id}({account.email})收到验证码: {code}",
@@ -172,28 +182,28 @@ class RegistrationWorker(threading.Thread):
                 "message": f"🌐 启动新的浏览器实例（账号{account.id}）...",
                 "level": "INFO"
             })
+            # OTP 邮箱配置（根据 simple_mode 决定启动时机）
+            email_cfg_dict = (self._config_dict or {}).get("email", {})
+            has_email_cfg = isinstance(email_cfg_dict, dict) and email_cfg_dict.get("address") and email_cfg_dict.get("password")
 
-            # 启动独立线程监听该账号的验证码邮件（使用配置中的 OTP 邮箱）
-            otp_thread = None
-            try:
-                email_cfg_dict = (self._config_dict or {}).get("email", {})
-                if isinstance(email_cfg_dict, dict) and email_cfg_dict.get("address") and email_cfg_dict.get("password"):
+            # 半自动模式：在账号开始时就启动验证码监听，方便用户手动输入
+            if self.simple_mode and has_email_cfg:
+                try:
                     def _stop_flag() -> bool:
                         return self.stop_event.is_set()
 
-                    otp_thread = threading.Thread(
+                    threading.Thread(
                         target=build_and_fetch_from_dict,
                         args=(email_cfg_dict, getattr(account, "email", None), on_verification_code, _stop_flag),
                         daemon=True,
-                    )
-                    otp_thread.start()
+                    ).start()
                     self.message_queue.put({
                         "type": "log",
-                        "message": f"🔍 已为账号{account.id}启动验证码监听线程",
+                        "message": f"🔍 已为账号{account.id}启动验证码监听线程（半自动模式）",
                         "level": "INFO",
                     })
-            except Exception as e:
-                logger.warning(f"启动账号{account.id}的验证码监听失败: {e}")
+                except Exception as e:
+                    logger.warning(f"启动账号{account.id}的验证码监听失败: {e}")
             
             # 使用配置驱动引擎执行（navigate → ... → pause_for_manual）
             driver = None
@@ -207,28 +217,37 @@ class RegistrationWorker(threading.Thread):
 
                 driver = BrowserProvider.start_browser(headless=headless)
 
-                # 当 Flow 执行到 pause_for_manual（到达人机验证）时，立即标记本账号为 success
+                # 当 Flow 执行到 pause_for_manual（到达人机验证）时，根据模式做不同处理
                 def _mark_reached_manual():
                     try:
-                        account.status = "success"
-                        account.completed_at = datetime.now()
-                        self.task.update_statistics()
-                        # 发送进度与日志到 GUI
-                        self.message_queue.put({
-                            "type": "account_completed",
-                            "account_id": account.id,
-                            "status": "success"
-                        })
-                        self.message_queue.put({
-                            "type": "progress",
-                            "current": self.task.statistics.completed,
-                            "total": self.task.statistics.total
-                        })
-                        self.message_queue.put({
-                            "type": "log",
-                            "message": f"✅ 账号{account.id}已填写到人机验证（已计入成功）",
-                            "level": "INFO"
-                        })
+                        if self.simple_mode:
+                            # 半自动模式：到达人机验证即视为成功
+                            account.status = "success"
+                            account.completed_at = datetime.now()
+                            self.task.update_statistics()
+                            # 发送进度与日志到 GUI
+                            self.message_queue.put({
+                                "type": "account_completed",
+                                "account_id": account.id,
+                                "status": "success"
+                            })
+                            self.message_queue.put({
+                                "type": "progress",
+                                "current": self.task.statistics.completed,
+                                "total": self.task.statistics.total
+                            })
+                            self.message_queue.put({
+                                "type": "log",
+                                "message": f"✅ 账号{account.id}已填写到人机验证（已计入成功）",
+                                "level": "INFO"
+                            })
+                        else:
+                            # 全自动模式：仅记录到达人机验证，不立刻计入成功
+                            self.message_queue.put({
+                                "type": "log",
+                                "message": f"⏸ 账号{account.id}已到达人机验证，准备自动继续（全自动模式）",
+                                "level": "INFO",
+                            })
                     except Exception as _e:
                         logger.warning(f"标记到达人机验证为成功时出错: {_e}")
 
@@ -236,7 +255,14 @@ class RegistrationWorker(threading.Thread):
                     "config": self._config_dict or {},
                     "manual_continue_event": self.manual_continue_event,
                     "on_reached_manual": _mark_reached_manual,
+                    "email_cfg": email_cfg_dict,
+                    "has_email_cfg": has_email_cfg,
+                    "stop_event": self.stop_event,
+                    "on_verification_code": on_verification_code,
+                    "verification": verification_holder,
                 }
+                if not self.simple_mode:
+                    ctx["auto_mode"] = True
                 account_ctx = {
                     "email": getattr(account, 'email', None),
                     "password": getattr(account, 'password', None),
@@ -244,7 +270,7 @@ class RegistrationWorker(threading.Thread):
                     "last_name": getattr(account, 'last_name', None),
                 }
 
-                # 执行 Flow（停在人机验证由 Flow 的 pause_for_manual 决定）
+                # 执行 Flow（包括 pause_for_manual 和后续的自动步骤，由 FlowRunner 决定具体行为）
                 FlowRunner.execute(self._flow, driver, account=account_ctx, context=ctx)
 
                 # 设置成功标志（若未在 on_reached_manual 回调中标记成功，则以此为准）
@@ -380,7 +406,7 @@ class MainWindow:
         
         # 邮箱加密强密码（CONFIGFLOW_EMAIL_SECRET_KEY）
         ttk.Label(config_frame, text="邮箱强密码(加密密钥):").grid(row=2, column=0, sticky=tk.W, pady=2)
-        self.secret_var = tk.StringVar()
+        self.secret_var = tk.StringVar(value="windsurf")
         self.secret_entry = ttk.Entry(
             config_frame,
             textvariable=self.secret_var,
@@ -400,6 +426,14 @@ class MainWindow:
             width=15
         )
         self.start_button.pack(side=tk.LEFT, padx=5)
+        
+        self.auto_start_button = ttk.Button(
+            control_frame,
+            text="全自动注册",
+            command=self.start_auto_registration,
+            width=15
+        )
+        self.auto_start_button.pack(side=tk.LEFT, padx=5)
         
         self.stop_button = ttk.Button(
             control_frame,
@@ -546,6 +580,8 @@ class MainWindow:
             
             # 禁用开始按钮，启用停止按钮和手动继续按钮
             self.start_button.config(state=tk.DISABLED)
+            if hasattr(self, "auto_start_button"):
+                self.auto_start_button.config(state=tk.DISABLED)
             self.stop_button.config(state=tk.NORMAL)
             self.manual_continue_button.config(state=tk.NORMAL)
             
@@ -579,6 +615,78 @@ class MainWindow:
             logger.error(f"启动注册失败: {e}", exc_info=True)
             messagebox.showerror("错误", f"启动注册失败: {e}")
     
+    def start_auto_registration(self):
+        """全自动注册按钮回调"""
+        try:
+            # 验证输入
+            count = int(self.count_spinbox.get())
+            if not 1 <= count <= 100:
+                messagebox.showerror("错误", "注册数量必须在1-100之间")
+                return
+            
+            # 验证配置
+            errors = self.config.validate()
+            if errors:
+                messagebox.showerror("配置错误", "\n".join(errors))
+                return
+            
+            # 根据界面输入设置邮箱加密强密码环境变量（仅当前进程生效）
+            secret = self.secret_var.get().strip() if hasattr(self, "secret_var") else ""
+            if secret:
+                os.environ["CONFIGFLOW_EMAIL_SECRET_KEY"] = secret
+                self.log_message("已设置邮箱加密强密码（仅当前运行有效）", "INFO")
+            
+            self.log_message(f"开始生成{count}个账号（全自动模式）...", "INFO")
+            
+            # 生成账号
+            accounts = self.data_manager.generate_accounts(count)
+            
+            # 创建任务
+            self.current_task = self.data_manager.create_task(accounts)
+            
+            self.log_message(f"任务创建成功: {self.current_task.task_id}", "INFO")
+            
+            # 重置UI状态
+            self.progress_var.set(0)
+            self.update_stats(0, 0, 0)
+            
+            # 禁用两个开始按钮，启用停止按钮，禁用手动继续按钮
+            self.start_button.config(state=tk.DISABLED)
+            if hasattr(self, "auto_start_button"):
+                self.auto_start_button.config(state=tk.DISABLED)
+            self.stop_button.config(state=tk.NORMAL)
+            self.manual_continue_button.config(state=tk.DISABLED)
+            
+            # 清除停止标志
+            self.stop_event.clear()
+            
+            # 全自动模式 + 临时目录模式
+            is_simple_mode = False
+            use_real_profile = False
+            self.log_message("使用全自动模式（人机验证后自动继续 + 自动填验证码）", "INFO")
+            self.log_message("使用临时目录模式", "INFO")
+            
+            # 启动工作线程
+            self.worker_thread = RegistrationWorker(
+                self.current_task,
+                self.config,
+                self.data_manager,
+                self.message_queue,
+                self.stop_event,
+                self.manual_continue_event,
+                simple_mode=is_simple_mode,
+                use_real_profile=use_real_profile
+            )
+            self.worker_thread.start()
+            
+            self.log_message("全自动注册任务已启动", "INFO")
+            
+        except ValueError as e:
+            messagebox.showerror("错误", f"输入无效: {e}")
+        except Exception as e:
+            logger.error(f"启动全自动注册失败: {e}", exc_info=True)
+            messagebox.showerror("错误", f"启动全自动注册失败: {e}")
+    
     def stop_registration(self):
         """停止注册按钮回调"""
         if messagebox.askyesno("确认", "确定要停止当前注册任务吗？"):
@@ -603,6 +711,8 @@ class MainWindow:
             
             # 更新UI状态
             self.start_button.config(state=tk.NORMAL)
+            if hasattr(self, "auto_start_button"):
+                self.auto_start_button.config(state=tk.NORMAL)
             self.manual_continue_button.config(state=tk.DISABLED)
             self.update_status("任务已停止")
             self.log_message("注册任务已停止", "INFO")
@@ -748,6 +858,8 @@ class MainWindow:
                     self.start_button.config(state=tk.NORMAL)
                     self.stop_button.config(state=tk.DISABLED)
                     self.manual_continue_button.config(state=tk.DISABLED)
+                    if hasattr(self, "auto_start_button"):
+                        self.auto_start_button.config(state=tk.NORMAL)
                     
                     messagebox.showinfo(
                         "任务完成",

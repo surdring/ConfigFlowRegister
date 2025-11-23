@@ -90,7 +90,7 @@ def fetch_otp_for_account(
         return
 
     end_ts = time.time() + max(5, email_cfg.time_window_seconds)
-    poll_interval = 5.0
+    poll_interval = 1.0
 
     try:
         logger.info("[OTP] 为账号 %s 启动验证码监听", account_email)

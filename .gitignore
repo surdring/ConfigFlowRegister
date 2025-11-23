@@ -53,11 +53,11 @@ desktop.ini
 .idea/
 .vscode/
 *.code-workspace
-.windsurf/
+# .windsurf/
 
 # Project docs and optional directories
-tests/
-openspec/
+# tests/
+# openspec/
 old-py/
 docs/
 

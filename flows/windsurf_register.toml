@@ -31,6 +31,10 @@ value = "password"
 by = "id"
 value = "passwordConfirmation"
 
+[selectors.otp_input]
+by = "css"
+value = "input[maxlength='1']"
+
 [[steps]]
 action = "navigate"
 
@@ -86,3 +90,26 @@ target = "continue_btn"
 [[steps]]
 action = "pause_for_manual"
 message = "请完成人机验证后点击 GUI 的 '手动继续'"
+
+[[steps]]
+action = "sleep"
+value = "6000"
+
+[[steps]]
+action = "click"
+target = "continue_btn"
+
+[[steps]]
+action = "wait_otp"
+
+[[steps]]
+action = "type"
+target = "otp_input"
+value = "{verification.code}"
+
+[[steps]]
+action = "sleep"
+value = "2000"
+
+[[steps]]
+action = "wait_onboarding_source"

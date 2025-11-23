@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import time
+import threading
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -21,6 +22,7 @@ except Exception:  # Python <3.11
 
 from .models import Flow, Step, Selector
 from . import actions as act
+from ..utils.email_otp_fetcher import build_and_fetch_from_dict
 try:
     from utils.exceptions import ValidationError  # type: ignore
 except Exception:
@@ -217,17 +219,117 @@ def _execute_step(step: Step, flow: Flow, driver: Any, ctx: Dict[str, Any]) -> N
                 cb()
             except Exception:
                 pass
-        # 等待用户在 GUI 中点击“手动继续”
-        evt = ctx.get("manual_continue_event") if isinstance(ctx, dict) else None
-        if evt is not None:
+        auto_mode = False
+        if isinstance(ctx, dict):
             try:
-                evt.wait()
-                evt.clear()
+                auto_mode = bool(ctx.get("auto_mode"))
             except Exception:
-                pass
-        else:
-            input("按回车继续...")
+                auto_mode = False
+        if not auto_mode:
+            # 等待用户在 GUI 中点击“手动继续”
+            evt = ctx.get("manual_continue_event") if isinstance(ctx, dict) else None
+            if evt is not None:
+                try:
+                    evt.wait()
+                    evt.clear()
+                except Exception:
+                    pass
+            else:
+                input("按回车继续...")
         return
+
+    if action == "wait_otp":
+        auto_mode = bool(ctx.get("auto_mode")) if isinstance(ctx, dict) else False
+        if not auto_mode:
+            logger.info("wait_otp 在非自动模式下跳过")
+            return
+
+        if not isinstance(ctx, dict):
+            raise ValidationError("wait_otp 缺少上下文")
+
+        config = ctx.get("config") or {}
+        email_cfg = ctx.get("email_cfg") or (config.get("email") if isinstance(config, dict) else {})
+        if not isinstance(email_cfg, dict):
+            raise ValidationError("wait_otp 缺少 email 配置")
+        if not (email_cfg.get("address") and email_cfg.get("password")):
+            raise ValidationError("wait_otp: email 配置不完整，无法自动获取验证码")
+
+        account_ctx = ctx.get("account") or {}
+        if not isinstance(account_ctx, dict):
+            raise ValidationError("wait_otp: 缺少 account 上下文")
+        account_email = account_ctx.get("email")
+        if not account_email:
+            raise ValidationError("wait_otp: 缺少 account.email")
+
+        verification = ctx.get("verification")
+        if not isinstance(verification, dict):
+            raise ValidationError("wait_otp: 缺少 verification 状态")
+
+        stop_event = ctx.get("stop_event")
+        if stop_event is None:
+            raise ValidationError("wait_otp: 缺少 stop_event")
+
+        cb = ctx.get("on_verification_code")
+        if not callable(cb):
+            raise ValidationError("wait_otp: 缺少 on_verification_code 回调")
+
+        def _stop_flag() -> bool:
+            try:
+                return bool(stop_event.is_set())  # type: ignore[call-arg]
+            except Exception:
+                return False
+
+        # 若尚未有验证码，则启动监听线程
+        if not verification.get("code"):
+            threading.Thread(
+                target=build_and_fetch_from_dict,
+                args=(email_cfg, account_email, cb, _stop_flag),
+                daemon=True,
+            ).start()
+            logger.info("🔍 已启动验证码监听线程（全自动模式）")
+
+        logger.info("⏳ 正在等待邮箱验证码（全自动模式）...")
+        wait_deadline = time.time() + 180
+        while not verification.get("code") and not _stop_flag() and time.time() < wait_deadline:
+            time.sleep(1.0)
+
+        if _stop_flag():
+            raise ValidationError("任务已被用户停止（等待验证码时）")
+
+        code = verification.get("code")
+        if not code:
+            raise ValidationError("在全自动模式下等待验证码超时或未获取到验证码")
+
+        logger.info("🔐 已获取验证码（全自动模式）")
+        return
+
+    if action == "wait_onboarding_source":
+        auto_mode = bool(ctx.get("auto_mode")) if isinstance(ctx, dict) else False
+        if not auto_mode:
+            logger.info("wait_onboarding_source 在非自动模式下跳过")
+            return
+
+        logger.info("⏳ 已填入验证码，正在等待页面跳转到 onboarding source（全自动模式）...")
+        target_prefix = "https://windsurf.com/account/onboarding"
+        target_query = "page=source"
+        end_ts = time.time() + 120
+        last_error: Optional[Exception] = None
+
+        while time.time() < end_ts:
+            try:
+                url = getattr(driver, "current_url", None)  # type: ignore[attr-defined]
+                if isinstance(url, str) and url.startswith(target_prefix) and target_query in url:
+                    logger.info("✅ 页面已跳转到 onboarding source（全自动模式）")
+                    return
+            except Exception as e:  # pragma: no cover - 容错路径
+                last_error = e
+            time.sleep(1.0)
+
+        if last_error is not None:
+            raise ValidationError(f"等待 WindSurf onboarding 页面失败: {last_error}")
+        raise ValidationError(
+            "等待 WindSurf onboarding 页面超时: 未在指定时间内跳转到 'https://windsurf.com/account/onboarding?page=source'"
+        )
 
     if action == "wait":
         if not step.target:
@@ -382,7 +484,7 @@ def _validate_flow(data: Dict[str, Any], flow: Flow) -> None:
     if needs_selectors and not isinstance(data.get("selectors"), dict):
         raise ValidationError("缺少 selectors 段（存在使用 target 的步骤时必需）")
 
-    valid_actions = {"navigate", "wait", "type", "click", "sleep", "expect", "pause_for_manual"}
+    valid_actions = {"navigate", "wait", "type", "click", "sleep", "expect", "pause_for_manual", "wait_otp", "wait_onboarding_source"}
     valid_states = {None, "visible", "present", "clickable"}
     for idx, s in enumerate(flow.steps):
         if s.action not in valid_actions:
