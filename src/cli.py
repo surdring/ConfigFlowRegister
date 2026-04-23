@@ -60,6 +60,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--flow", type=str, help="Flow TOML 路径（覆盖 config.flow.file）")
     p.add_argument("--count", type=int, help="注册账号数量，默认取自 config.registration.default_count")
     p.add_argument("--interval", type=float, help="账号间隔秒数，默认取自 config.registration.interval_seconds")
+    p.add_argument("--retries", type=int, default=2, help="失败时重试次数（默认2次，共3次尝试）")
     return p
 
 
@@ -136,6 +137,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             driver_factory=_factory,
             driver_cleanup=_cleanup,
             base_context={"config": cfg_dict},
+            max_retries=args.retries,
         )
 
         # 结果输出

@@ -66,6 +66,10 @@ class BrowserProvider:
             chrome_options.add_argument("--no-first-run")
             chrome_options.add_argument("--disable-default-apps")
 
+            # 页面加载策略：eager 模式，HTML解析完即返回，不等待图片/第三方JS
+            chrome_options.add_argument("--page-load-strategy=eager")
+            chrome_options.page_load_strategy = "eager"
+
             if headless:
                 logger.warning("⚠️ 无头模式下人机验证通过率低，建议关闭 headless")
                 chrome_options.add_argument("--headless=new")
@@ -142,7 +146,7 @@ class BrowserProvider:
                 pass
 
             BrowserProvider._apply_enhanced_stealth(driver)
-            driver.implicitly_wait(5)
+            driver.implicitly_wait(2)
 
             logger.info("=" * 70)
             logger.info("✅ Chrome 浏览器已启动（临时目录模式，反检测已启用）")

@@ -15,8 +15,8 @@
     "timeout_seconds": 30,
     "max_retries": 3,
     "domain": "yaoshangxian.top",
-    "url": "https://windsurf.com/account/register",
-    "password": "xqxatcdj1014"
+    "url": "https://windsurf.com/account/register?migrated=true",
+    "password": ""
   },
   "flow": {
     "file": "flows/windsurf_register.toml"

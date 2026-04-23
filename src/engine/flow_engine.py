@@ -309,26 +309,26 @@ def _execute_step(step: Step, flow: Flow, driver: Any, ctx: Dict[str, Any]) -> N
             logger.info("wait_onboarding_source 在非自动模式下跳过")
             return
 
-        logger.info("⏳ 已填入验证码，正在等待页面跳转到 onboarding source（全自动模式）...")
-        target_prefix = "https://windsurf.com/account/onboarding"
-        target_query = "page=source"
-        end_ts = time.time() + 120
-        last_error: Optional[Exception] = None
+        profile_url = "https://windsurf.com/profile"
+        timeout = 15
+
+        logger.info("⏳ 等待页面跳转到 %s ...", profile_url)
+        end_ts = time.time() + timeout
 
         while time.time() < end_ts:
             try:
                 url = getattr(driver, "current_url", None)  # type: ignore[attr-defined]
-                if isinstance(url, str) and url.startswith(target_prefix) and target_query in url:
-                    logger.info("✅ 页面已跳转到 onboarding source（全自动模式）")
+                if isinstance(url, str) and url.startswith(profile_url):
+                    logger.info("✅ 页面已跳转到 %s，注册成功", url)
+                    time.sleep(2)  # 等待2秒后开始新一轮注册
                     return
-            except Exception as e:  # pragma: no cover - 容错路径
-                last_error = e
+            except Exception:
+                pass
             time.sleep(1.0)
 
-        if last_error is not None:
-            raise ValidationError(f"等待 WindSurf onboarding 页面失败: {last_error}")
+        logger.error("❌ 等待页面跳转超时，跳过此账号")
         raise ValidationError(
-            "等待 WindSurf onboarding 页面超时: 未在指定时间内跳转到 'https://windsurf.com/account/onboarding?page=source'"
+            "验证码验证失败: 页面未跳转到profile，将重启浏览器继续下个账号"
         )
 
     if action == "wait":
@@ -342,7 +342,13 @@ def _execute_step(step: Step, flow: Flow, driver: Any, ctx: Dict[str, Any]) -> N
         if not step.target:
             raise ValidationError("click 步骤需要 target")
         locator = _get_locator(flow, step.target)
-        act.click(driver, locator)
+        by, val = locator
+        logger.info("[步骤] 点击元素: %s=%s", by, val)
+        try:
+            act.click(driver, locator)
+        except ValidationError as e:
+            logger.error("[步骤失败] 点击 %s=%s 时出错: %s", by, val, str(e))
+            raise
         return
 
     if action == "type":
@@ -350,7 +356,27 @@ def _execute_step(step: Step, flow: Flow, driver: Any, ctx: Dict[str, Any]) -> N
             raise ValidationError("type 步骤需要 target")
         locator = _get_locator(flow, step.target)
         text = value or ""
-        act.type(driver, locator, text)
+        by, val = locator
+        logger.info("[步骤] 输入文本到: %s=%s", by, val)
+        try:
+            act.type(driver, locator, text)
+        except ValidationError as e:
+            logger.error("[步骤失败] 输入 %s=%s 时出错: %s", by, val, str(e))
+            raise
+        return
+
+    if action == "type_otp_digits":
+        if not step.target:
+            raise ValidationError("type_otp_digits 步骤需要 target")
+        locator = _get_locator(flow, step.target)
+        text = value or ""
+        by, val = locator
+        logger.info("[步骤] 逐位输入验证码到: %s=%s", by, val)
+        try:
+            act.type_otp_digits(driver, locator, text)
+        except ValidationError as e:
+            logger.error("[步骤失败] 逐位输入验证码 %s=%s 时出错: %s", by, val, str(e))
+            raise
         return
 
     if action == "expect":
@@ -372,6 +398,7 @@ def run_batch(
     driver_factory: Any,
     driver_cleanup: Optional[Any] = None,
     base_context: Optional[Dict[str, Any]] = None,
+    max_retries: int = 2,
 ) -> Dict[str, Any]:
     """批量执行 Flow，返回结果统计与明细。
 
@@ -382,6 +409,7 @@ def run_batch(
         driver_factory: 可调用对象，返回一个可用的 WebDriver 实例
         driver_cleanup: 可调用对象，接收 driver，负责清理（可选）
         base_context: 传递给执行器的基础上下文（可选）
+        max_retries: 失败时最大重试次数（默认2次，共3次尝试）
     Returns:
         { 'results': [...], 'success': int, 'failed': int, 'total': int, 'elapsed_s': float }
     """
@@ -392,40 +420,64 @@ def run_batch(
     for i, acc in enumerate(accounts, start=1):
         acc_id = acc.get("email") or f"#{i}"
         logger.info("开始账号执行: %s (%d/%d)", acc_id, i, len(accounts))
-        driver = None
+
+        # 重试逻辑
+        attempt = 0
+        max_attempts = max_retries + 1
         ok = True
         err: Optional[str] = None
-        t1 = time.time()
-        try:
-            driver = driver_factory()
-            ctx = dict(base_context or {})
-            ctx.setdefault("config", {})
-            FlowRunner.execute(flow, driver, account=acc, context=ctx)
-        except Exception as e:
-            ok = False
-            err = str(e)
-            logger.error("账号执行失败: %s - %s", acc_id, err)
-        finally:
+        elapsed_ms = 0
+
+        while attempt < max_attempts:
+            attempt += 1
+            driver = None
+            t1 = time.time()
+            ok = True
+            err = None
+
+            if attempt > 1:
+                logger.info("🔄 账号 %s 第 %d/%d 次重试...", acc_id, attempt, max_attempts)
+                time.sleep(2)  # 重试前等待2秒
+
             try:
-                if driver_cleanup is not None:
-                    driver_cleanup(driver)
-                else:
-                    try:
-                        driver.quit()  # type: ignore
-                    except Exception:
-                        pass
+                driver = driver_factory()
+                ctx = dict(base_context or {})
+                ctx.setdefault("config", {})
+                FlowRunner.execute(flow, driver, account=acc, context=ctx)
+                break  # 成功，退出重试循环
+            except Exception as e:
+                ok = False
+                err = str(e)
+                logger.error("账号执行失败 (尝试 %d/%d): %s - %s", attempt, max_attempts, acc_id, err)
             finally:
+                try:
+                    if driver_cleanup is not None:
+                        driver_cleanup(driver)
+                    else:
+                        try:
+                            driver.quit()  # type: ignore
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
                 elapsed_ms = int((time.time() - t1) * 1000)
-                results.append({
-                    "account": acc_id,
-                    "success": ok,
-                    "error": err,
-                    "elapsed_ms": elapsed_ms,
-                })
-                if ok:
-                    success += 1
-                else:
-                    failed += 1
+
+        # 记录最终结果
+        results.append({
+            "account": acc_id,
+            "success": ok,
+            "error": err,
+            "elapsed_ms": elapsed_ms,
+            "attempts": attempt,
+        })
+        if ok:
+            success += 1
+            logger.info("✅ 账号 %s 注册成功", acc_id)
+        else:
+            failed += 1
+            logger.error("❌ 账号 %s 注册失败（已重试%d次）: %s", acc_id, max_attempts, err)
+
         if i < len(accounts) and interval_seconds > 0:
             time.sleep(interval_seconds)
 
@@ -484,7 +536,7 @@ def _validate_flow(data: Dict[str, Any], flow: Flow) -> None:
     if needs_selectors and not isinstance(data.get("selectors"), dict):
         raise ValidationError("缺少 selectors 段（存在使用 target 的步骤时必需）")
 
-    valid_actions = {"navigate", "wait", "type", "click", "sleep", "expect", "pause_for_manual", "wait_otp", "wait_onboarding_source"}
+    valid_actions = {"navigate", "wait", "type", "type_otp_digits", "click", "sleep", "expect", "pause_for_manual", "wait_otp", "wait_onboarding_source"}
     valid_states = {None, "visible", "present", "clickable"}
     for idx, s in enumerate(flow.steps):
         if s.action not in valid_actions:

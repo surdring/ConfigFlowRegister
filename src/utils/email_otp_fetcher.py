@@ -30,14 +30,57 @@ class OtpMailboxConfig:
     time_window_seconds: int
 
 
-def extract_otp_from_subject(subject: str) -> Optional[str]:
-    """从邮件主题中提取 6 位验证码。"""
-    if not subject:
+def extract_otp(text: str) -> Optional[str]:
+    """从文本中提取 6 位验证码。"""
+    if not text:
         return None
-    m = re.search(r"(\d{6})", subject)
+    m = re.search(r"(\d{6})", text)
     if not m:
         return None
     return m.group(1)
+
+
+def extract_otp_from_subject(subject: str) -> Optional[str]:
+    """从邮件主题中提取 6 位验证码（兼容旧接口）。"""
+    return extract_otp(subject)
+
+
+def get_email_body(msg) -> str:
+    """从邮件消息中提取正文文本。"""
+    body = ""
+    if msg.is_multipart():
+        for part in msg.walk():
+            content_type = part.get_content_type()
+            content_disposition = str(part.get("Content-Disposition", ""))
+            if content_type == "text/plain" and "attachment" not in content_disposition:
+                try:
+                    payload = part.get_payload(decode=True)
+                    if payload:
+                        charset = part.get_content_charset() or "utf-8"
+                        body += payload.decode(charset, errors="ignore")
+                except Exception:
+                    pass
+            elif content_type == "text/html" and "attachment" not in content_disposition:
+                try:
+                    payload = part.get_payload(decode=True)
+                    if payload:
+                        charset = part.get_content_charset() or "utf-8"
+                        # 简单去除 HTML 标签
+                        html = payload.decode(charset, errors="ignore")
+                        text = re.sub(r"<[^>]+>", " ", html)
+                        text = re.sub(r"\s+", " ", text).strip()
+                        body += " " + text
+                except Exception:
+                    pass
+    else:
+        try:
+            payload = msg.get_payload(decode=True)
+            if payload:
+                charset = msg.get_content_charset() or "utf-8"
+                body = payload.decode(charset, errors="ignore")
+        except Exception:
+            pass
+    return body
 
 
 def _build_mailbox_config(raw_cfg: dict) -> Optional[OtpMailboxConfig]:
@@ -103,21 +146,19 @@ def fetch_otp_for_account(
                     logger.info("[OTP] 检测到停止标志，结束账号 %s 的验证码监听", account_email)
                     return
 
-                # 优先在未读邮件中查找验证码；如果没有未读邮件，则回退到全部邮件。
+                # 只搜索未读邮件
                 typ, data = imap.search(None, "UNSEEN")
-                if typ != "OK" or not data or not data[0]:
-                    typ, data = imap.search(None, "ALL")
-                    if typ != "OK":
-                        time.sleep(poll_interval)
-                        continue
+                if typ != "OK":
+                    time.sleep(poll_interval)
+                    continue
 
                 ids = data[0].split()
                 if not ids:
                     time.sleep(poll_interval)
                     continue
 
-                # 只检查最新的 10 封邮件，减少无效遍历
-                ids_to_check = list(reversed(ids[-10:]))
+                # 按ID降序（最新的优先），每轮最多检查5封最新邮件
+                ids_to_check = list(reversed(ids))[:5]
 
                 for msg_id in ids_to_check:  # 优先检查最新邮件
                     try:
@@ -127,30 +168,77 @@ def fetch_otp_for_account(
                         msg = email.message_from_bytes(msg_data[0][1])
                         subject = msg.get("Subject", "")
                         to_header = msg.get("To", "")
+                        from_header = msg.get("From", "")
 
-                        if account_email not in to_header:
+                        logger.debug("[OTP] 检查邮件: id=%s, subject=%r, to=%r, from=%r", msg_id, subject, to_header, from_header)
+
+                        # 检查是否是发给当前账号的邮件（考虑代发情况）
+                        recipient_match = account_email in to_header
+
+                        # 如果To头不匹配，尝试从其他头或正文中找原始收件人
+                        if not recipient_match:
+                            # 检查 Reply-To 或其他可能包含原始收件人的头
+                            reply_to = msg.get("Reply-To", "")
+                            x_original_to = msg.get("X-Original-To", "")
+                            delivered_to = msg.get("Delivered-To", "")
+                            envelope_to = msg.get("Envelope-To", "")
+
+                            for header in [reply_to, x_original_to, delivered_to, envelope_to]:
+                                if account_email in header:
+                                    recipient_match = True
+                                    logger.debug("[OTP] 在其他头中找到收件人匹配: %s", header)
+                                    break
+
+                        # 如果头信息都不匹配，尝试从正文找（验证码邮件正文通常包含账号）
+                        if not recipient_match:
+                            body_preview = get_email_body(msg)[:1000]
+                            # 常见模式：邮件正文会提到注册邮箱
+                            if account_email in body_preview:
+                                recipient_match = True
+                                logger.debug("[OTP] 在正文中找到收件人匹配")
+
+                        if not recipient_match:
+                            # 不匹配则标记为已读，避免未读邮件堆积
+                            try:
+                                imap.store(msg_id, '+FLAGS', '\\Seen')
+                            except Exception:
+                                pass
+                            logger.debug("[OTP] 跳过邮件: 收件人不匹配 (期望: %s, To头: %s)", account_email, to_header)
                             continue
 
-                        # 关键字匹配（若配置了 subject_keywords，则要求全部命中）
-                        subj_lower = subject.lower()
-                        if email_cfg.subject_keywords:
-                            if not all(k.lower() in subj_lower for k in email_cfg.subject_keywords):
-                                continue
+                        # 账号匹配成功，直接尝试提取验证码（跳过主题关键词过滤）
+                        # 先从主题提取验证码
+                        code = extract_otp(subject)
+                        source = "subject"
 
-                        code = extract_otp_from_subject(subject)
+                        # 主题中没有，则从正文提取
                         if not code:
+                            body = get_email_body(msg)
+                            code = extract_otp(body)
+                            source = "body"
+                            logger.debug("[OTP] 正文内容: %r", body[:500] if body else "(empty)")
+
+                        if not code:
+                            logger.debug("[OTP] 跳过邮件: 未找到 6 位验证码 (subject=%r)", subject)
                             continue
 
                         logger.info(
-                            "[OTP] 账号 %s 收到验证码 %s (subject=%r)",
+                            "[OTP] 账号 %s 收到验证码 %s (from=%s, subject=%r)",
                             account_email,
                             code,
+                            source,
                             subject,
                         )
+                        # 标记为已读，避免下次重复检查
+                        try:
+                            imap.store(msg_id, '+FLAGS', '\\Seen')
+                        except Exception:
+                            pass
                         on_code(code)
                         return
-                    except Exception:
+                    except Exception as e:
                         # 单封邮件解析失败不影响整体轮询
+                        logger.warning("[OTP] 解析邮件 %s 失败: %s", msg_id, e)
                         continue
 
                 time.sleep(poll_interval)

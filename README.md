@@ -176,6 +176,14 @@ python -m src.cli --flow flows/windsurf_register.toml --count 3 --interval 2
   python -m pip install -U pyinstaller
   ```
 
+- **Windows PowerShell 注意事项**
+  - 若你的 Python 安装在带空格的路径（例如 `C:\Program Files\Python311\python.exe`），在 PowerShell 里需要使用 `&` 调用运算符：
+    ```powershell
+    & "C:\Program Files\Python311\python.exe" -m pip install -r .\requirements.txt
+    & "C:\Program Files\Python311\python.exe" -m PyInstaller --clean --noconfirm configflow_gui.spec
+    ```
+  - 建议始终用同一个解释器执行 `-m pip` 与 `-m PyInstaller`，避免出现 `No module named PyInstaller`（安装到了别的环境/用户目录）。
+
 - **构建 CLI 版（控制台应用）**
   ```powershell
   python -m PyInstaller --clean --noconfirm configflow.spec
@@ -205,3 +213,34 @@ python -m src.cli --flow flows/windsurf_register.toml --count 3 --interval 2
 - **常见问题**
   - Chrome/Chromedriver：需安装 Chrome；系统路径存在不匹配时可临时移除 PATH 中的旧 chromedriver，让 UC 自动管理。
   - 权限：确保对 EXE 同级目录有写权限（日志、config.json、data/.）
+
+
+
+  最后打包成功命令：
+    ```powershell
+    cd D:\develop\python\ConfigFlowRegister
+    & "C:\Program Files\Python311\python.exe" -m pip install -r .\requirements.txt
+    & "C:\Program Files\Python311\python.exe" -m PyInstaller --clean --noconfirm configflow_gui.spec
+    ```
+
+## 性能优化记录
+
+### 页面加载优化
+- **pageLoadStrategy = `eager`**：浏览器启动时设置页面加载策略为 `eager`，HTML 解析完即返回，不等待图片、第三方 JS 等资源加载完成，大幅减少 `navigate` 步骤的等待时间。
+- **implicitly_wait 缩短**：从 5 秒缩短为 2 秒，减少元素查找的默认等待。
+
+### OTP 验证码邮件获取优化
+- **只搜索未读邮件**：IMAP 搜索条件从 `ALL` 改为 `UNSEEN`，避免遍历大量历史邮件。
+- **每轮最多检查 5 封最新邮件**：按 ID 降序取最新 5 封，不再逐一遍历所有未读邮件。
+- **标记已读**：不匹配的邮件和已提取验证码的邮件都会被标记为已读（`\\Seen`），避免未读邮件堆积导致重复检查。
+
+### OTP 输入与页面跳转优化
+- **验证码输入无多余动作**：`type_otp_digits` 逐位输入 6 位验证码后不再发送 `Keys.RETURN`，由页面自动提交。
+- **移除 sleep 等待**：TOML 中移除了验证码输入后的 `sleep 5000` 步骤。
+- **简化 `wait_onboarding_source`**：
+  - 输入验证码后直接等待页面跳转到 `https://windsurf.com/profile`（最多 30 秒）。
+  - 跳转成功后等待 2 秒，然后开始新一轮注册。
+  - 超时则标记失败，重启浏览器继续下个账号。
+
+### 账号数量限制
+- 最大注册账号数量从 200 提升到 500（GUI Spinbox、配置验证、数据管理均已同步更新）。D:\develop\python\ConfigFlowRegister\README.md

@@ -157,8 +157,8 @@ def _validate_config(config: Dict[str, Any]) -> None:
         errors.append("缺少 registration 段或类型错误，应为对象")
     else:
         default_count = reg_config.get("default_count", 10)
-        if not isinstance(default_count, int) or not 1 <= default_count <= 100:
-            errors.append("registration.default_count必须为1-100之间的整数")
+        if not isinstance(default_count, int) or not 1 <= default_count <= 500:
+            errors.append("registration.default_count必须为1-500之间的整数")
 
         interval = reg_config.get("interval_seconds", 5)
         if not isinstance(interval, int) or interval < 0:

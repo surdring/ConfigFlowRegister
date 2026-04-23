@@ -368,6 +368,10 @@ class MainWindow:
         self.worker_thread: Optional[threading.Thread] = None
         self.current_task: Optional[RegistrationTask] = existing_task
         self.current_otp_account_email: Optional[str] = None
+
+        # 自动导出：任务完成后自动保存成功账号
+        self.auto_export_on_complete: bool = True
+        self._auto_export_done_task_id: Optional[str] = None
         
         # 将全局日志转发到 GUI 日志面板（仅挂到 root，避免重复）
         try:
@@ -377,18 +381,40 @@ class MainWindow:
             root_logger = logging.getLogger()
             if not any(isinstance(h, GuiQueueLogHandler) for h in root_logger.handlers):
                 root_logger.addHandler(self._gui_log_handler)
+            self._root_logger = root_logger
         except Exception:
+            self._root_logger = None
             pass
-        
+
         self._create_ui()
         self._start_queue_check()
-        
+
         # 如果有未完成的任务，提示用户是否继续
         if existing_task:
             self._handle_existing_task(existing_task)
-        
+
         logger.info("MainWindow initialized")
-    
+
+    def _on_verbose_log_changed(self):
+        """处理详细日志复选框状态变化"""
+        is_verbose = self.verbose_log_var.get()
+        level = logging.DEBUG if is_verbose else logging.INFO
+
+        # 更新 GUI 日志处理器级别
+        if hasattr(self, "_gui_log_handler") and self._gui_log_handler:
+            self._gui_log_handler.setLevel(level)
+
+        # 更新根日志记录器级别
+        if hasattr(self, "_root_logger") and self._root_logger:
+            self._root_logger.setLevel(level)
+
+        # 更新 windsurf_registration 日志记录器
+        app_logger = logging.getLogger("windsurf_registration")
+        app_logger.setLevel(level)
+
+        status = "开启" if is_verbose else "关闭"
+        self.log_message(f"详细日志模式已{status}", "INFO")
+
     def _create_ui(self):
         """创建UI布局"""
         self.root.title("WindSurf账号批量注册工具")
@@ -400,7 +426,7 @@ class MainWindow:
         
         # 注册数量
         ttk.Label(config_frame, text="注册数量:").grid(row=1, column=0, sticky=tk.W, pady=2)
-        self.count_spinbox = ttk.Spinbox(config_frame, from_=1, to=100, width=10)
+        self.count_spinbox = ttk.Spinbox(config_frame, from_=1, to=500, width=10)
         self.count_spinbox.grid(row=1, column=1, sticky=tk.W, pady=2, padx=5)
         self.count_spinbox.set(self.config.registration.default_count)
         
@@ -414,6 +440,16 @@ class MainWindow:
             width=30,
         )
         self.secret_entry.grid(row=2, column=1, sticky=tk.W, pady=2, padx=5, columnspan=2)
+
+        # 详细日志复选框
+        self.verbose_log_var = tk.BooleanVar(value=False)
+        self.verbose_log_checkbutton = ttk.Checkbutton(
+            config_frame,
+            text="显示详细日志(DEBUG)",
+            variable=self.verbose_log_var,
+            command=self._on_verbose_log_changed,
+        )
+        self.verbose_log_checkbutton.grid(row=3, column=0, sticky=tk.W, pady=5, columnspan=2)
         
         # 控制按钮区域
         control_frame = ttk.Frame(self.root, padding=10)
@@ -542,14 +578,53 @@ class MainWindow:
         
         # 初始日志
         self.log_message("应用程序启动完成", "INFO")
+
+    def _get_auto_export_path(self) -> Path:
+        """生成自动导出文件路径（默认保存到程序目录下exports）。"""
+        from ..utils.path import resource_path, ensure_dir
+        exports_dir = ensure_dir(resource_path("exports"))
+        file_name = f"windsurf-accounts-{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.json"
+        return exports_dir / file_name
+
+    def _auto_export_results_on_task_complete(self) -> None:
+        """任务完成后自动导出成功账号（仅导出一次）。"""
+        if not getattr(self, "auto_export_on_complete", False):
+            return
+        if not self.current_task or not self.current_task.accounts:
+            return
+
+        # 防止同一个任务重复导出（队列可能多次收到完成事件）
+        if self._auto_export_done_task_id == getattr(self.current_task, "task_id", None):
+            return
+
+        success_accounts = [
+            acc for acc in self.current_task.accounts
+            if acc.status == "success"
+        ]
+        if not success_accounts:
+            return
+
+        try:
+            export_path = self._get_auto_export_path()
+            self._export_to_json(success_accounts, export_path)
+            self._auto_export_done_task_id = getattr(self.current_task, "task_id", None)
+            self.log_message(f"自动导出成功账号完成: {str(export_path)}", "INFO")
+
+            messagebox.showinfo(
+                "自动保存成功",
+                f"已自动保存{len(success_accounts)}个成功账号到:\n{str(export_path)}"
+            )
+        except Exception as e:
+            logger.error(f"自动导出失败: {e}", exc_info=True)
+            self.log_message(f"自动导出失败: {e}", "ERROR")
     
     def start_registration(self):
         """开始注册按钮回调"""
         try:
             # 验证输入
             count = int(self.count_spinbox.get())
-            if not 1 <= count <= 100:
-                messagebox.showerror("错误", "注册数量必须在1-100之间")
+            if not 1 <= count <= 500:
+                messagebox.showerror("错误", "注册数量必须在1-500之间")
                 return
             
             # 验证配置
@@ -620,8 +695,8 @@ class MainWindow:
         try:
             # 验证输入
             count = int(self.count_spinbox.get())
-            if not 1 <= count <= 100:
-                messagebox.showerror("错误", "注册数量必须在1-100之间")
+            if not 1 <= count <= 500:
+                messagebox.showerror("错误", "注册数量必须在1-500之间")
                 return
             
             # 验证配置
@@ -737,7 +812,7 @@ class MainWindow:
                 ("CSV文件", "*.csv"),
                 ("所有文件", "*.*")
             ],
-            initialfile=f"windsurf-accounts.json"
+            initialfile=f"windsurf-accounts-{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.json"
         )
         
         if file_path:
@@ -770,15 +845,12 @@ class MainWindow:
                 messagebox.showerror("错误", f"导出失败: {e}")
     
     def _export_to_json(self, accounts: list, file_path: Path):
-        """导出为JSON格式（简洁格式：只包含email和password）"""
+        """导出为JSON格式（简洁格式：只包含email）"""
         import json
         
         # 构建简洁的JSON数组
         data = [
-            {
-                "email": acc.email,
-                "password": acc.password
-            }
+            acc.email
             for acc in accounts
         ]
         
@@ -860,6 +932,9 @@ class MainWindow:
                     self.manual_continue_button.config(state=tk.DISABLED)
                     if hasattr(self, "auto_start_button"):
                         self.auto_start_button.config(state=tk.NORMAL)
+
+                    # 任务完成后自动导出成功账号
+                    self._auto_export_results_on_task_complete()
                     
                     messagebox.showinfo(
                         "任务完成",

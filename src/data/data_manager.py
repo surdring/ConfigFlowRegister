@@ -150,8 +150,8 @@ class Configuration:
         # 密码允许为空，用户在GUI中填写
         
         # 注册配置验证
-        if not 1 <= self.registration.default_count <= 100:
-            errors.append("注册数量必须在1-100之间")
+        if not 1 <= self.registration.default_count <= 500:
+            errors.append("注册数量必须在1-500之间")
         if self.registration.interval_seconds < 0:
             errors.append("间隔时间不能为负数")
         
@@ -294,7 +294,7 @@ class DataManager:
         生成指定数量的账号
         
         Args:
-            count: 账号数量（1-100）
+            count: 账号数量（1-500）
             
         Returns:
             账号列表
@@ -304,8 +304,8 @@ class DataManager:
             EmailGeneratorError: 邮箱生成器执行失败
         """
         # 验证数量
-        if not 1 <= count <= 100:
-            raise ValueError("账号数量必须在1-100之间")
+        if not 1 <= count <= 500:
+            raise ValueError("账号数量必须在1-500之间")
         
         logger.info(f"开始生成{count}个账号...")
         
@@ -319,7 +319,8 @@ class DataManager:
             username = email_addr.split("@")[0]
             
             # 密码优先从配置读取，兼容老配置则回退到历史默认值
-            resolved_password = "xqxatcdj1014"
+            # resolved_password = "xqxatcdj1014"
+            resolved_password = email_addr
             cfg = getattr(self, "config", None)
             try:
                 if cfg is not None:
@@ -378,9 +379,9 @@ class DataManager:
                         domain = d
             
             for _ in range(count):
-                # 生成随机15位字符的本地部分（小写字母+数字）
-                chars = string.ascii_lowercase + string.digits
-                local_part = ''.join(random.choices(chars, k=15))
+                # 生成随机15位字符的本地部分（前9位小写字母 + 后6位固定为6）
+                prefix = ''.join(random.choices(string.ascii_lowercase, k=14))
+                local_part = f"{prefix}{'6'}"
                 
                 # 固定域名（必须使用yaoshangxian.top）
                 email = f"{local_part}@{domain}"
@@ -410,9 +411,15 @@ class DataManager:
         """
         import random
         import string
-        
-        # 直接生成随机名字，不依赖邮箱内容
-        first_name = ''.join(random.choices(string.ascii_lowercase, k=3))
+
+        # first_name 使用邮箱 local_part（@ 前部分）的前三个字母，仅保留字母
+        local_part = (email.split("@", 1)[0] or "").strip().lower()
+        local_letters = ''.join(ch for ch in local_part if ch.isalpha())
+        first_name = local_letters[:3]
+        if len(first_name) < 3:
+            first_name += ''.join(random.choices(string.ascii_lowercase, k=3 - len(first_name)))
+
+        # last_name 保持随机生成
         last_name = ''.join(random.choices(string.ascii_lowercase, k=3))
         
         # 首字母大写
@@ -464,25 +471,12 @@ class DataManager:
                 writer = csv.writer(f)
                 
                 # 写入表头
-                writer.writerow([
-                    "ID", "Email", "Username", "Password", 
-                    "FirstName", "LastName", "Status", 
-                    "ErrorMessage", "CreatedAt", "CompletedAt"
-                ])
+                writer.writerow(["Email"])
                 
                 # 写入数据
                 for account in accounts:
                     writer.writerow([
-                        account.id,
                         account.email,
-                        account.username,
-                        account.password,
-                        account.first_name,
-                        account.last_name,
-                        account.status,
-                        account.error_message or "",
-                        account.created_at.isoformat(),
-                        account.completed_at.isoformat() if account.completed_at else ""
                     ])
             
             logger.info(f"CSV导出成功: {file_path}")
