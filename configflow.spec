@@ -5,11 +5,12 @@ ConfigFlowRegister - PyInstaller 配置
 用法:
     python -m PyInstaller --clean --noconfirm configflow.spec
 输出:
-    dist/ConfigFlowRegister.exe (Windows)
-    dist/ConfigFlowRegister (Linux/macOS)
+    Windows: dist/ConfigFlowRegister.exe
+    Linux:   dist/ConfigFlowRegister.bin
 """
 
 block_cipher = None
+import sys
 
 
 a = Analysis(
@@ -75,7 +76,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='ConfigFlowRegister',
+    name='ConfigFlowRegister' if sys.platform == 'win32' else 'ConfigFlowRegister.bin',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

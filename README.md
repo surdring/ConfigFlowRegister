@@ -273,43 +273,68 @@ xvfb-run python src/main.py
 
 ### Linux 打包构建
 
-**环境准备**
+**环境准备（推荐虚拟环境）**
 ```bash
-# 安装 PyInstaller
-pip install pyinstaller
+# 安装 tkinter（GUI 版必需，系统级 C 扩展，pip 无法安装）
+sudo apt install python3-tk
+
+# 创建虚拟环境（避免打包系统 Python 的大量依赖）
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 安装依赖
+pip install -r requirements.txt
 
 # 确保 Chrome 已安装
 google-chrome --version
 ```
 
-**构建 GUI 版（单文件可执行程序）**
+**构建 GUI 版**
 ```bash
 python -m PyInstaller --clean --noconfirm configflow_gui.spec
 ```
 - 产物目录：`dist/ConfigFlowRegisterGUI/`
 - 启动：
   ```bash
-  ./dist/ConfigFlowRegisterGUI/ConfigFlowRegisterGUI
+  ./dist/ConfigFlowRegisterGUI/ConfigFlowRegisterGUI.bin
   ```
 
 **构建 CLI 版**
 ```bash
 python -m PyInstaller --clean --noconfirm configflow.spec
 ```
-- 产物：`dist/ConfigFlowRegister`
+- 产物：`dist/ConfigFlowRegister.bin`
 - 运行：
   ```bash
-  ./dist/ConfigFlowRegister --flow flows/windsurf_register.toml --count 1
+  ./dist/ConfigFlowRegister.bin --flow flows/windsurf_register.toml --count 1
   ```
 
 **打包后资源放置**
 - `config.json`：与可执行文件同级（首次运行自动生成）
-- Flow 文件：放在可执行文件同级或 `flows/` 子目录
+- Flow 文件：打包时自动包含在 `_internal/flows/` 目录下；也可手动放在可执行文件同级或 `flows/` 子目录
+- **PyInstaller 6 one-dir 布局**：数据文件位于 `_internal/` 子目录，程序会自动从 `_internal/` 查找资源
 
 **Linux 打包注意事项**
+- **虚拟环境**：强烈建议创建虚拟环境打包，否则 PyInstaller 会将系统 Python 的 55+ 依赖全部打包，导致产物过大（>200MB 对比 ~91MB）
+- **tkinter 依赖**：打包前需安装系统包 `sudo apt install python3-tk`（pip 无法安装此 C 扩展）
 - **无需包含 Chrome**：目标机器需要自行安装 Chrome，`undetected-chromedriver` 会在运行时自动下载匹配的 ChromeDriver
-- **tkinter 依赖**：确保目标机器有图形环境（X11 或 Wayland），或使用 `xvfb` 虚拟显示
-- **文件权限**：打包后的可执行文件可能需要添加执行权限：`chmod +x ./dist/ConfigFlowRegisterGUI/ConfigFlowRegisterGUI`
+- **ChromeDriver 手动安装（备用）**：若 UC 自动下载失败（如 Chrome 142+ 版本），可手动下载对应版本到 `~/.local/share/undetected_chromedriver/` 或系统 PATH
+  ```bash
+  # 示例：手动下载 ChromeDriver 142
+  wget https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/142.0.7444.175/linux64/chromedriver-linux64.zip
+  unzip chromedriver-linux64.zip && mv chromedriver-linux64/chromedriver ~/.local/share/undetected_chromedriver/
+  sudo ln -s ~/.local/share/undetected_chromedriver/chromedriver /usr/local/bin/chromedriver
+  ```
+- **图形环境**：确保目标机器有图形环境（X11 或 Wayland），或使用 `xvfb` 虚拟显示
+- **文件权限**：打包后的可执行文件已含执行权限，如需手动添加：`chmod +x ./dist/ConfigFlowRegisterGUI/ConfigFlowRegisterGUI.bin`
+
+**运行环境变量**
+- **邮箱解密密钥**：若使用加密邮箱配置（`enc:` 前缀），必须设置环境变量：
+  ```bash
+  export CONFIGFLOW_EMAIL_SECRET_KEY="你的密钥"
+  ./dist/ConfigFlowRegisterGUI/ConfigFlowRegisterGUI.bin
+  ```
+- **数据目录**：打包后运行时的数据目录为 `dist/ConfigFlowRegisterGUI/data/`，重新打包会重置此目录；建议定期备份或导出账号数据
 
 
 

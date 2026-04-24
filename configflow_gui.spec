@@ -5,13 +5,15 @@ ConfigFlowRegister GUI - PyInstaller 配置（带控制台日志）
 用法:
     python -m PyInstaller --clean --noconfirm configflow_gui.spec
 输出:
-    dist/ConfigFlowRegisterGUI/ConfigFlowRegisterGUI.exe
+    Windows: dist/ConfigFlowRegisterGUI/ConfigFlowRegisterGUI.exe
+    Linux:   dist/ConfigFlowRegisterGUI/ConfigFlowRegisterGUI.bin
 说明:
-    - 采用 one-dir 布局，flows/ 会自动出现在 EXE 同级目录
+    - 采用 one-dir 布局，数据文件在 _internal/ 子目录
     - console=True，启动 GUI 的同时保留控制台以查看日志
 """
 
 block_cipher = None
+import sys
 from PyInstaller.utils.hooks import collect_submodules
 
 
@@ -90,7 +92,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='ConfigFlowRegisterGUI',
+    name='ConfigFlowRegisterGUI' if sys.platform == 'win32' else 'ConfigFlowRegisterGUI.bin',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

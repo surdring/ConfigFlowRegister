@@ -3,6 +3,7 @@ from __future__ import annotations
 import imaplib
 import email
 import re
+import ssl
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -95,12 +96,14 @@ def _build_mailbox_config(raw_cfg: dict) -> Optional[OtpMailboxConfig]:
     # 支持 enc: 前缀加密配置，运行时解密后再使用
     try:
         address = decrypt_email_secret(str(raw_address))
-    except Exception:
-        address = str(raw_address)
+    except Exception as e:
+        logger.error("[OTP] 邮箱地址解密失败（请检查 CONFIGFLOW_EMAIL_SECRET_KEY 环境变量）: %s", e)
+        return None
     try:
         password = decrypt_email_secret(str(raw_password))
-    except Exception:
-        password = str(raw_password)
+    except Exception as e:
+        logger.error("[OTP] 邮箱授权码解密失败（请检查 CONFIGFLOW_EMAIL_SECRET_KEY 环境变量）: %s", e)
+        return None
 
     if not address or not password:
         return None
@@ -135,13 +138,19 @@ def fetch_otp_for_account(
     end_ts = time.time() + max(5, email_cfg.time_window_seconds)
     poll_interval = 1.0
 
+    imap = None
     try:
         logger.info("[OTP] 为账号 %s 启动验证码监听", account_email)
-        with imaplib.IMAP4_SSL(email_cfg.imap_server, email_cfg.imap_port) as imap:
-            imap.login(email_cfg.address, email_cfg.password)
-            imap.select("INBOX")
+        # 使用显式 SSL 上下文，避免 PyInstaller 打包后的证书问题
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        
+        imap = imaplib.IMAP4_SSL(email_cfg.imap_server, email_cfg.imap_port, ssl_context=ssl_context)
+        imap.login(email_cfg.address, email_cfg.password)
+        imap.select("INBOX")
 
-            while time.time() < end_ts:
+        while time.time() < end_ts:
                 if stop_flag and stop_flag():
                     logger.info("[OTP] 检测到停止标志，结束账号 %s 的验证码监听", account_email)
                     return
@@ -246,6 +255,17 @@ def fetch_otp_for_account(
         logger.info("[OTP] 在窗口内未为账号 %s 找到验证码邮件", account_email)
     except Exception as e:  # pragma: no cover - 网络/环境依赖
         logger.warning("[OTP] 为账号 %s 监听验证码失败: %s", account_email, e)
+    finally:
+        # 显式关闭连接，忽略 LOGOUT 错误（PyInstaller 环境下常见）
+        if imap:
+            try:
+                imap.logout()
+            except Exception:
+                pass
+            try:
+                imap.close()
+            except Exception:
+                pass
 
 
 def build_and_fetch_from_dict(
