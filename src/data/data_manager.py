@@ -274,9 +274,13 @@ class DataManager:
     @staticmethod
     def _resolve_data_dir() -> Path:
         """解析数据目录。"""
-        # 1) 打包后：直接使用可执行文件同级的 data 目录
+        # 1) 打包后：使用 dist/data/（打包目录的父级，避免被 PyInstaller 清除）
         if getattr(sys, "frozen", False):
-            return Path(sys.executable).parent / "data"
+            exe_dir = Path(sys.executable).parent
+            # 如果可执行文件在 dist/ConfigFlowRegisterGUI/，则使用 dist/data/
+            if exe_dir.name == "ConfigFlowRegisterGUI" and exe_dir.parent.name == "dist":
+                return exe_dir.parent / "data"
+            return exe_dir / "data"
         
         # 2) 开发环境：优先使用项目根目录（包含 .git 或 .env 的目录）
         current = Path.cwd()
