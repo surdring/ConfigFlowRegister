@@ -420,8 +420,16 @@ class MainWindow:
         self.root.title("WindSurf账号批量注册工具")
         self.root.geometry("900x700")
         
+        # 主 Notebook（Tab 容器）
+        self.main_notebook = ttk.Notebook(self.root)
+        self.main_notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # ── Tab 1: 注册 ──
+        self.reg_tab = ttk.Frame(self.main_notebook)
+        self.main_notebook.add(self.reg_tab, text=" 注册 ")
+        
         # 配置区域
-        config_frame = ttk.LabelFrame(self.root, text="配置", padding=10)
+        config_frame = ttk.LabelFrame(self.reg_tab, text="配置", padding=10)
         config_frame.pack(fill=tk.X, padx=10, pady=5)
         
         # 注册数量
@@ -452,7 +460,7 @@ class MainWindow:
         self.verbose_log_checkbutton.grid(row=3, column=0, sticky=tk.W, pady=5, columnspan=2)
         
         # 控制按钮区域
-        control_frame = ttk.Frame(self.root, padding=10)
+        control_frame = ttk.Frame(self.reg_tab, padding=10)
         control_frame.pack(fill=tk.X, padx=10, pady=5)
         
         self.start_button = ttk.Button(
@@ -498,7 +506,7 @@ class MainWindow:
         self.manual_continue_button.pack(side=tk.LEFT, padx=5)
         
         # 进度显示区域
-        progress_frame = ttk.LabelFrame(self.root, text="进度", padding=10)
+        progress_frame = ttk.LabelFrame(self.reg_tab, text="进度", padding=10)
         progress_frame.pack(fill=tk.X, padx=10, pady=5)
         
         # 进度条
@@ -554,7 +562,7 @@ class MainWindow:
         self.copy_otp_button.pack(side=tk.LEFT, padx=5)
         
         # 日志面板
-        log_frame = ttk.LabelFrame(self.root, text="日志", padding=10)
+        log_frame = ttk.LabelFrame(self.reg_tab, text="日志", padding=10)
         log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
         # 创建文本框和滚动条
@@ -579,9 +587,199 @@ class MainWindow:
         # 初始日志
         self.log_message("应用程序启动完成", "INFO")
 
+        # ── Tab 2: 账号池 ──
+        self._create_pool_tab()
+
+    # ── 账号池 Tab ──────────────────────────────────────
+
+    def _create_pool_tab(self):
+        """创建账号池管理 Tab"""
+        try:
+            from ..pool.account_pool import AccountPoolManager
+        except ImportError:
+            from src.pool.account_pool import AccountPoolManager  # type: ignore
+
+        self.pool_manager = AccountPoolManager()
+        self.pool_manager.check_reset()
+
+        pool_tab = ttk.Frame(self.main_notebook)
+        self.main_notebook.add(pool_tab, text=" 账号池 ")
+
+        # ── 顶部操作栏 ──
+        top_frame = ttk.Frame(pool_tab, padding=5)
+        top_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        ttk.Button(top_frame, text="导入账号", command=self._pool_import, width=12).pack(side=tk.LEFT, padx=3)
+        ttk.Button(top_frame, text="取用账号", command=self._pool_get_next, width=12).pack(side=tk.LEFT, padx=3)
+        ttk.Button(top_frame, text="检查重置", command=self._pool_check_reset, width=12).pack(side=tk.LEFT, padx=3)
+
+        # ── 统计信息 ──
+        stats_frame = ttk.LabelFrame(pool_tab, text="统计", padding=5)
+        stats_frame.pack(fill=tk.X, padx=10, pady=3)
+
+        self.pool_stats_var = tk.StringVar(value="")
+        ttk.Label(stats_frame, textvariable=self.pool_stats_var, font=("Arial", 9)).pack(anchor=tk.W)
+
+        self.pool_reset_var = tk.StringVar(value="")
+        ttk.Label(stats_frame, textvariable=self.pool_reset_var, font=("Arial", 9), foreground="gray").pack(anchor=tk.W)
+
+        # ── 账号列表 ──
+        list_frame = ttk.Frame(pool_tab)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=3)
+
+        # Treeview
+        columns = ("email", "status", "daily", "weekly", "last_used")
+        self.pool_tree = ttk.Treeview(list_frame, columns=columns, show="headings", selectmode="extended")
+        self.pool_tree.heading("email", text="邮箱")
+        self.pool_tree.heading("status", text="状态")
+        self.pool_tree.heading("daily", text="日配额")
+        self.pool_tree.heading("weekly", text="周配额")
+        self.pool_tree.heading("last_used", text="上次使用")
+        self.pool_tree.column("email", width=250)
+        self.pool_tree.column("status", width=80)
+        self.pool_tree.column("daily", width=70)
+        self.pool_tree.column("weekly", width=70)
+        self.pool_tree.column("last_used", width=140)
+
+        tree_scroll = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.pool_tree.yview)
+        self.pool_tree.configure(yscrollcommand=tree_scroll.set)
+        self.pool_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # ── 底部操作栏 ──
+        bottom_frame = ttk.Frame(pool_tab, padding=5)
+        bottom_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        ttk.Button(bottom_frame, text="标记日配额耗尽", command=lambda: self._pool_mark("daily"), width=14).pack(side=tk.LEFT, padx=3)
+        ttk.Button(bottom_frame, text="标记周配额耗尽", command=lambda: self._pool_mark("weekly"), width=14).pack(side=tk.LEFT, padx=3)
+        ttk.Button(bottom_frame, text="恢复可用", command=lambda: self._pool_mark("available"), width=10).pack(side=tk.LEFT, padx=3)
+        ttk.Button(bottom_frame, text="删除", command=self._pool_delete, width=8).pack(side=tk.LEFT, padx=3)
+
+        # 初始刷新
+        self._pool_refresh()
+
+    def _pool_refresh(self):
+        """刷新账号池列表和统计"""
+        # 清空 Treeview
+        for item in self.pool_tree.get_children():
+            self.pool_tree.delete(item)
+
+        # 填充数据
+        for acc in self.pool_manager.accounts:
+            status_text = {"available": "可用", "exhausted": "耗尽"}.get(acc.status, acc.status)
+            daily_text = "✗ 耗尽" if acc.daily_exhausted else "✓ 有"
+            weekly_text = "✗ 耗尽" if acc.weekly_exhausted else "✓ 有"
+            last_used = acc.last_used_at.replace("T", " ")[:16] if acc.last_used_at else "-"
+            self.pool_tree.insert("", tk.END, iid=acc.email, values=(
+                acc.email, status_text, daily_text, weekly_text, last_used
+            ))
+
+        # 统计
+        stats = self.pool_manager.get_stats()
+        self.pool_stats_var.set(
+            f"总数: {stats['total']} | 可用: {stats['available']} | "
+            f"日耗尽: {stats['daily_exhausted']} | 周耗尽: {stats['weekly_exhausted']}"
+        )
+
+        # 重置倒计时
+        reset_info = self.pool_manager.get_next_reset_info()
+        daily_sec = max(reset_info["daily_in_seconds"], 0)
+        weekly_sec = max(reset_info["weekly_in_seconds"], 0)
+        daily_h, daily_m = divmod(daily_sec // 60, 60)
+        weekly_d, weekly_rem = divmod(weekly_sec // 3600, 24)
+        weekly_h, weekly_m = divmod(weekly_rem, 60)
+        self.pool_reset_var.set(
+            f"下次日重置: {daily_h}小时{daily_m}分钟后 | "
+            f"下次周重置: {weekly_d}天{weekly_h}小时后"
+        )
+
+    def _pool_import(self):
+        """导入账号到池"""
+        try:
+            from ..utils.path import resource_path
+        except ImportError:
+            from src.utils.path import resource_path  # type: ignore
+        file_path = filedialog.askopenfilename(
+            title="选择导出的账号文件",
+            filetypes=[("JSON文件", "*.json"), ("所有文件", "*.*")],
+            initialdir=str(resource_path("exports")),
+        )
+        if not file_path:
+            return
+
+        added = self.pool_manager.import_from_json(file_path)
+        if added > 0:
+            messagebox.showinfo("导入成功", f"新增 {added} 个账号到池")
+            self._pool_refresh()
+        else:
+            messagebox.showwarning("提示", "没有新账号需要导入（可能已存在）")
+
+    def _pool_get_next(self):
+        """取用下一个可用账号"""
+        acc = self.pool_manager.get_next_available()
+        if not acc:
+            messagebox.showwarning("提示", "没有可用账号（全部耗尽）")
+            return
+
+        # 复制邮箱到剪贴板
+        self.root.clipboard_clear()
+        self.root.clipboard_append(acc.email)
+
+        self._pool_refresh()
+
+        # 弹窗显示
+        messagebox.showinfo(
+            "取用账号",
+            f"邮箱: {acc.email}\n\n（密码与邮箱相同）\n\n邮箱已复制到剪贴板"
+        )
+
+    def _pool_check_reset(self):
+        """手动检查配额重置"""
+        daily, weekly = self.pool_manager.check_reset()
+        msg = f"日重置: {daily} 个账号"
+        if weekly:
+            msg += f"，周重置: {weekly} 个账号"
+        messagebox.showinfo("重置检查", msg)
+        self._pool_refresh()
+
+    def _pool_mark(self, mark_type: str):
+        """标记选中账号"""
+        selected = self.pool_tree.selection()
+        if not selected:
+            messagebox.showwarning("提示", "请先选择账号")
+            return
+
+        for email in selected:
+            if mark_type == "daily":
+                self.pool_manager.mark_daily_exhausted(email)
+            elif mark_type == "weekly":
+                self.pool_manager.mark_weekly_exhausted(email)
+            elif mark_type == "available":
+                self.pool_manager.mark_available(email)
+
+        self._pool_refresh()
+
+    def _pool_delete(self):
+        """删除选中账号"""
+        selected = self.pool_tree.selection()
+        if not selected:
+            messagebox.showwarning("提示", "请先选择账号")
+            return
+
+        if not messagebox.askyesno("确认删除", f"确定删除 {len(selected)} 个账号？"):
+            return
+
+        for email in selected:
+            self.pool_manager.remove_account(email)
+
+        self._pool_refresh()
+
     def _get_auto_export_path(self) -> Path:
         """生成自动导出文件路径（默认保存到程序目录下exports）。"""
-        from ..utils.path import resource_path, ensure_dir
+        try:
+            from ..utils.path import resource_path, ensure_dir
+        except ImportError:
+            from src.utils.path import resource_path, ensure_dir  # type: ignore
         exports_dir = ensure_dir(resource_path("exports"))
         file_name = f"windsurf-accounts-{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.json"
         return exports_dir / file_name
@@ -609,6 +807,15 @@ class MainWindow:
             self._export_to_json(success_accounts, export_path)
             self._auto_export_done_task_id = getattr(self.current_task, "task_id", None)
             self.log_message(f"自动导出成功账号完成: {str(export_path)}", "INFO")
+
+            # 自动导入到账号池
+            if hasattr(self, "pool_manager"):
+                emails = [acc.email for acc in success_accounts]
+                added = self.pool_manager.add_accounts(emails)
+                if added > 0:
+                    self.log_message(f"已将 {added} 个成功账号导入账号池", "INFO")
+                    if hasattr(self, "pool_tree"):
+                        self._pool_refresh()
 
             messagebox.showinfo(
                 "自动保存成功",

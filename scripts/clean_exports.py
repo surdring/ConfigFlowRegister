@@ -24,17 +24,17 @@ def clean_exports(export_dir: str | Path) -> None:
             cleaned = []
             for item in data:
                 if isinstance(item, dict) and "email" in item:
-                    cleaned.append(item["email"])
+                    cleaned.append({"email": item["email"]})
                 elif isinstance(item, str):
-                    cleaned.append(item)  # 已经是纯邮箱
+                    cleaned.append({"email": item})  # 纯邮箱也转为对象
                 else:
                     cleaned.append(item)
 
             with open(f, "w", encoding="utf-8") as fh:
                 json.dump(cleaned, fh, indent=2, ensure_ascii=False)
 
-            removed = len(data) - len([x for x in data if isinstance(x, str)])
-            print(f"✓ {f.name}: {len(cleaned)} 个邮箱, 清理了 {removed} 条含密码记录")
+            removed = len([x for x in data if isinstance(x, dict) and len(x) > 1])
+            print(f"✓ {f.name}: {len(cleaned)} 个邮箱, 清理了 {removed} 条含多余字段记录")
         else:
             print(f"⚠ {f.name}: 格式不符合预期，跳过")
 

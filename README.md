@@ -169,6 +169,62 @@ python -m src.cli --flow flows/windsurf_register.toml --count 3 --interval 2
     - 验证码会被写入系统剪贴板；
     - 日志会记录“已复制账号 {email} 的验证码”。
 
+## Linux 使用说明
+
+### 安装依赖
+
+```bash
+# 1. 安装 Chrome 浏览器（必须）
+# Debian/Ubuntu
+wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list'
+sudo apt update
+sudo apt install google-chrome-stable
+
+# 或直接使用包管理器（某些发行版）
+# sudo apt install google-chrome-stable
+
+# 2. 安装 Python 依赖
+cd ConfigFlowRegister
+pip install -r requirements.txt
+
+# 3. 确保 tkinter 可用（通常已内置，如缺失则安装）
+# sudo apt install python3-tk
+```
+
+### 运行程序
+
+**有桌面环境（本地/远程桌面）：**
+```bash
+# 直接运行 GUI
+python src/main.py
+
+# 或 CLI 模式
+python -m src.cli --flow flows/windsurf_register.toml --count 3
+```
+
+**无桌面环境（SSH 服务器）：**
+```bash
+# 安装虚拟显示
+sudo apt install xvfb
+
+# 使用虚拟显示运行 GUI
+xvfb-run python src/main.py
+```
+
+### 检查清单
+
+| 检查项 | 命令 |
+|-------|------|
+| Chrome 是否安装 | `google-chrome --version` |
+| tkinter 是否可用 | `python -c "import tkinter; print('OK')"` |
+| ChromeDriver 自动管理 | 无需手动安装，`undetected-chromedriver` 首次运行会自动下载 |
+
+**注意**：
+- `undetected-chromedriver` 会自动下载匹配的 ChromeDriver 到 `~/.local/share/undetected_chromedriver/`，无需手动配置
+- 首次运行会自动迁移旧版 JSON 数据到 SQLite
+
+
 ## 打包构建（PyInstaller）
 
 - **准备环境**
@@ -213,6 +269,47 @@ python -m src.cli --flow flows/windsurf_register.toml --count 3 --interval 2
 - **常见问题**
   - Chrome/Chromedriver：需安装 Chrome；系统路径存在不匹配时可临时移除 PATH 中的旧 chromedriver，让 UC 自动管理。
   - 权限：确保对 EXE 同级目录有写权限（日志、config.json、data/.）
+
+
+### Linux 打包构建
+
+**环境准备**
+```bash
+# 安装 PyInstaller
+pip install pyinstaller
+
+# 确保 Chrome 已安装
+google-chrome --version
+```
+
+**构建 GUI 版（单文件可执行程序）**
+```bash
+python -m PyInstaller --clean --noconfirm configflow_gui.spec
+```
+- 产物目录：`dist/ConfigFlowRegisterGUI/`
+- 启动：
+  ```bash
+  ./dist/ConfigFlowRegisterGUI/ConfigFlowRegisterGUI
+  ```
+
+**构建 CLI 版**
+```bash
+python -m PyInstaller --clean --noconfirm configflow.spec
+```
+- 产物：`dist/ConfigFlowRegister`
+- 运行：
+  ```bash
+  ./dist/ConfigFlowRegister --flow flows/windsurf_register.toml --count 1
+  ```
+
+**打包后资源放置**
+- `config.json`：与可执行文件同级（首次运行自动生成）
+- Flow 文件：放在可执行文件同级或 `flows/` 子目录
+
+**Linux 打包注意事项**
+- **无需包含 Chrome**：目标机器需要自行安装 Chrome，`undetected-chromedriver` 会在运行时自动下载匹配的 ChromeDriver
+- **tkinter 依赖**：确保目标机器有图形环境（X11 或 Wayland），或使用 `xvfb` 虚拟显示
+- **文件权限**：打包后的可执行文件可能需要添加执行权限：`chmod +x ./dist/ConfigFlowRegisterGUI/ConfigFlowRegisterGUI`
 
 
 
