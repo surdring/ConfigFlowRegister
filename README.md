@@ -296,7 +296,7 @@ python -m PyInstaller --clean --noconfirm configflow_gui.spec
 - 产物目录：`dist/ConfigFlowRegisterGUI/`
 - 启动：
   ```bash
-  cd ~/workspace/ConfigFlowRegister && ./dist/ConfigFlowRegisterGUI/ConfigFlowRegisterGUI.bin
+  cd ~/workspace/ConfigFlowRegister && ./dist/ConfigFlowRegisterGUI.bin
   ```
 
 **构建 CLI 版**
@@ -342,8 +342,8 @@ python -m PyInstaller --clean --noconfirm configflow.spec
     ```
 - **数据目录**：
   - 开发环境：使用项目根目录 `data/`
-  - 打包后：使用 `dist/ConfigFlowRegisterGUI/data/`（与可执行文件同级）
-  - **注意**：重新打包会清除 `dist/ConfigFlowRegisterGUI/` 目录，打包前请备份 `dist/ConfigFlowRegisterGUI/data/account_pool.db`
+  - 打包后：使用 `dist/data/`（与 `dist/ConfigFlowRegisterGUI/` 同级，避免被 PyInstaller 清除）
+  - **注意**：首次打包后需手动创建 `dist/data/` 并复制旧数据
 
 
 
