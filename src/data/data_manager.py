@@ -12,6 +12,7 @@ import json
 import subprocess
 import random
 import string
+import sys
 
 try:
     # 邮箱凭据加解密工具（用于在运行时解密配置中的加密邮箱地址/密码）
@@ -270,6 +271,29 @@ class RegistrationTask:
 class DataManager:
     """数据管理器"""
     
+    @staticmethod
+    def _resolve_data_dir() -> Path:
+        """解析数据目录，固定到项目根目录，避免打包后数据丢失。"""
+        # 1) 优先使用项目根目录（包含 .git 或 .env 的目录）
+        current = Path.cwd()
+        for marker in [".git", ".env", "config.json"]:
+            if (current / marker).exists():
+                return current / "data"
+        
+        # 2) 打包后：查找可执行文件所在目录的上级（如果上级有 .env 或 config.json）
+        if getattr(sys, "frozen", False):
+            exe_dir = Path(sys.executable).parent
+            # 检查上级目录是否有项目标记
+            for parent in [exe_dir.parent]:
+                for marker in [".env", "config.json"]:
+                    if (parent / marker).exists():
+                        return parent / "data"
+            # 3) 否则使用可执行文件目录（向后兼容）
+            return exe_dir / "data"
+        
+        # 4) 开发环境默认当前目录
+        return current / "data"
+
     def __init__(self, email_generator_script: Optional[Path] = None, config: Optional["Configuration"] = None):
         """
         初始化数据管理器
@@ -280,12 +304,12 @@ class DataManager:
         self.email_generator = email_generator_script  # 保留以兼容旧代码
         self.config = config
         
-        # 数据目录改为程序当前目录下的data文件夹
-        self.data_dir = Path("data")
+        # 数据目录固定到项目根目录，避免打包后数据丢失
+        self.data_dir = self._resolve_data_dir()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         
         # 历史邮箱记录文件：放在程序根目录（和config.json同级）
-        self.history_file = Path("registered_emails.txt")
+        self.history_file = self.data_dir.parent / "registered_emails.txt"
         
         logger.info(f"DataManager initialized with data dir: {self.data_dir.absolute()}")
     

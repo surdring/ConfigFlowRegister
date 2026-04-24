@@ -296,7 +296,7 @@ python -m PyInstaller --clean --noconfirm configflow_gui.spec
 - 产物目录：`dist/ConfigFlowRegisterGUI/`
 - 启动：
   ```bash
-  ./dist/ConfigFlowRegisterGUI/ConfigFlowRegisterGUI.bin
+  cd ~/workspace/ConfigFlowRegister && ./dist/ConfigFlowRegisterGUI/ConfigFlowRegisterGUI.bin
   ```
 
 **构建 CLI 版**
@@ -340,7 +340,7 @@ python -m PyInstaller --clean --noconfirm configflow.spec
     export CONFIGFLOW_EMAIL_SECRET_KEY="你的密钥"
     ./dist/ConfigFlowRegisterGUI/ConfigFlowRegisterGUI.bin
     ```
-- **数据目录**：打包后运行时的数据目录为 `dist/ConfigFlowRegisterGUI/data/`，重新打包会重置此目录；建议定期备份或导出账号数据
+- **数据目录**：数据目录固定到项目根目录 `data/`，打包后也会使用同一目录，数据不会随重新打包丢失
 
 
 
