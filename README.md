@@ -329,11 +329,17 @@ python -m PyInstaller --clean --noconfirm configflow.spec
 - **文件权限**：打包后的可执行文件已含执行权限，如需手动添加：`chmod +x ./dist/ConfigFlowRegisterGUI/ConfigFlowRegisterGUI.bin`
 
 **运行环境变量**
-- **邮箱解密密钥**：若使用加密邮箱配置（`enc:` 前缀），必须设置环境变量：
-  ```bash
-  export CONFIGFLOW_EMAIL_SECRET_KEY="你的密钥"
-  ./dist/ConfigFlowRegisterGUI/ConfigFlowRegisterGUI.bin
-  ```
+- **邮箱解密密钥**：若使用加密邮箱配置（`enc:` 前缀），需配置密钥（优先从 `.env` 文件读取，也可用环境变量）：
+  - 方式一（推荐）：在项目根目录或可执行文件同级目录创建 `.env` 文件：
+    ```bash
+    # .env
+    CONFIGFLOW_EMAIL_SECRET_KEY=你的密钥
+    ```
+  - 方式二：通过环境变量设置：
+    ```bash
+    export CONFIGFLOW_EMAIL_SECRET_KEY="你的密钥"
+    ./dist/ConfigFlowRegisterGUI/ConfigFlowRegisterGUI.bin
+    ```
 - **数据目录**：打包后运行时的数据目录为 `dist/ConfigFlowRegisterGUI/data/`，重新打包会重置此目录；建议定期备份或导出账号数据
 
 

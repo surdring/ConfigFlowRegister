@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+from pathlib import Path
 from typing import Optional
 
 _SECRET_ENV_VAR = "CONFIGFLOW_EMAIL_SECRET_KEY"
@@ -28,12 +29,52 @@ class EmailCryptoError(RuntimeError):
     """邮箱凭据加解密相关错误。"""
 
 
+def _load_dotenv() -> None:
+    """从 .env 文件加载环境变量（不覆盖已有值）。"""
+    # 1) 项目根目录（开发环境）
+    for candidate in [Path(".env"), Path(__file__).resolve().parent.parent.parent / ".env"]:
+        if candidate.exists():
+            _parse_dotenv(candidate)
+            return
+    # 2) 打包后：可执行文件同级目录
+    if getattr(os, "_MEIPASS", None) or getattr(os, "frozen", False) or getattr(__builtins__, "__import__", None):
+        try:
+            import sys
+            exe_dir = Path(sys.executable).parent
+            env_file = exe_dir / ".env"
+            if env_file.exists():
+                _parse_dotenv(env_file)
+        except Exception:
+            pass
+
+
+def _parse_dotenv(path: Path) -> None:
+    """简单解析 .env 文件，设置环境变量（不覆盖已有值）。"""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except Exception:
+        pass
+
+
 def _derive_key() -> bytes:
+    # 优先从 .env 文件加载
+    _load_dotenv()
     secret = os.environ.get(_SECRET_ENV_VAR)
     if not secret:
         raise EmailCryptoError(
-            f"未找到环境变量 {_SECRET_ENV_VAR}，无法解密邮箱凭据；"
-            "请为 OTP 邮箱配置加密密钥。"
+            f"未找到密钥配置（{_SECRET_ENV_VAR}），无法解密邮箱凭据；"
+            "请在 .env 文件或环境变量中设置加密密钥。"
         )
     # 使用 SHA-256 将任意长度密钥归一化为 32 字节
     return hashlib.sha256(secret.encode("utf-8")).digest()

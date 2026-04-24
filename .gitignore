@@ -10,6 +10,7 @@ env/
 venv/
 ENV/
 .env.*
+!.env.template
 
 # Packaging / build artifacts
 build/
