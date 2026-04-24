@@ -15,6 +15,78 @@
 - `src/gui/`：Tkinter GUI（与引擎对接）
 - `src/utils/`：配置、日志、异常、路径工具
 
+## 虚拟环境配置（推荐）
+
+使用虚拟环境隔离项目依赖，避免与系统 Python 环境冲突。
+
+### 创建并激活虚拟环境
+
+**Windows (PowerShell):**
+```powershell
+# 创建虚拟环境
+python -m venv venv
+
+# 激活虚拟环境
+.\venv\Scripts\Activate.ps1
+
+# 安装依赖
+pip install -r requirements.txt
+```
+
+**Windows (CMD):**
+```cmd
+# 创建虚拟环境
+python -m venv venv
+
+# 激活虚拟环境
+venv\Scripts\activate.bat
+
+# 安装依赖
+pip install -r requirements.txt
+```
+
+**Linux/macOS:**
+```bash
+# 创建虚拟环境
+python3 -m venv venv
+
+# 激活虚拟环境
+source venv/bin/activate
+
+# 安装依赖
+pip install -r requirements.txt
+```
+
+### 退出虚拟环境
+```bash
+deactivate
+```
+
+## 分支切换
+
+本项目使用 `linux-code` 分支作为 Linux 平台的主要开发分支。
+
+### 切换到 linux-code 分支
+
+```bash
+# 查看所有分支
+git branch -a
+
+# 切换到 linux-code 分支
+git checkout linux-code
+
+# 如果本地没有该分支，先拉取远程分支
+git fetch origin linux-code
+git checkout -b linux-code origin/linux-code
+```
+
+### 保持分支同步
+
+```bash
+# 拉取最新更新
+git pull origin linux-code
+```
+
 ## 运行方式
 
 ### 1) 旧入口（向后兼容）
