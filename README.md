@@ -340,7 +340,10 @@ python -m PyInstaller --clean --noconfirm configflow.spec
     export CONFIGFLOW_EMAIL_SECRET_KEY="你的密钥"
     ./dist/ConfigFlowRegisterGUI/ConfigFlowRegisterGUI.bin
     ```
-- **数据目录**：数据目录固定到项目根目录 `data/`，打包后也会使用同一目录，数据不会随重新打包丢失
+- **数据目录**：
+  - 开发环境：使用项目根目录 `data/`
+  - 打包后：使用 `dist/ConfigFlowRegisterGUI/data/`（与可执行文件同级）
+  - **注意**：重新打包会清除 `dist/ConfigFlowRegisterGUI/` 目录，打包前请备份 `dist/ConfigFlowRegisterGUI/data/account_pool.db`
 
 
 

@@ -273,25 +273,18 @@ class DataManager:
     
     @staticmethod
     def _resolve_data_dir() -> Path:
-        """解析数据目录，固定到项目根目录，避免打包后数据丢失。"""
-        # 1) 优先使用项目根目录（包含 .git 或 .env 的目录）
+        """解析数据目录。"""
+        # 1) 打包后：直接使用可执行文件同级的 data 目录
+        if getattr(sys, "frozen", False):
+            return Path(sys.executable).parent / "data"
+        
+        # 2) 开发环境：优先使用项目根目录（包含 .git 或 .env 的目录）
         current = Path.cwd()
         for marker in [".git", ".env", "config.json"]:
             if (current / marker).exists():
                 return current / "data"
         
-        # 2) 打包后：查找可执行文件所在目录的上级（如果上级有 .env 或 config.json）
-        if getattr(sys, "frozen", False):
-            exe_dir = Path(sys.executable).parent
-            # 检查上级目录是否有项目标记
-            for parent in [exe_dir.parent]:
-                for marker in [".env", "config.json"]:
-                    if (parent / marker).exists():
-                        return parent / "data"
-            # 3) 否则使用可执行文件目录（向后兼容）
-            return exe_dir / "data"
-        
-        # 4) 开发环境默认当前目录
+        # 3) 默认当前目录
         return current / "data"
 
     def __init__(self, email_generator_script: Optional[Path] = None, config: Optional["Configuration"] = None):
