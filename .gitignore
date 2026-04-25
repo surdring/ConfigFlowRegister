@@ -63,3 +63,29 @@ old-py/
 
 # Misc
 ~$*
+
+# === Node.js / Frontend (account-pool-gui) ===
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# === Rust / Tauri ===
+target/
+Cargo.lock
+account-pool-gui/target/
+account-pool-gui/Cargo.lock
+
+# Tauri build bundles
+account-pool-gui/src-tauri/target/release/bundle/
+*.AppImage
+*.deb
+*.rpm
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+account_pool.db
