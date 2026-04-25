@@ -1,7 +1,7 @@
 [flow]
 name = "WindSurf Register (MVP)"
 start_url = "https://windsurf.com/account/register?migrated=true"
-timeout_ms = 5000
+timeout_ms = 10000
 
 [selectors.email]
 by = "css"
