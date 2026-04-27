@@ -20,6 +20,7 @@ pub struct PageResult {
 const FIREBASE_API_KEY: &str = "AIzaSyDsOl-1XpT5err0Tcnx8FFod1H8gVGIycY";
 
 #[derive(Debug, Deserialize)]
+#[allow(non_snake_case)]
 struct FirebaseResponse {
     idToken: Option<String>,
     error: Option<FirebaseError>,
@@ -30,12 +31,38 @@ struct FirebaseError {
     message: Option<String>,
 }
 
-/// 创建 HTTP 客户端（自动检测系统代理）
+/// 创建 HTTP 客户端（自动检测系统代理环境变量，代理不可达则直连）
 fn create_http_client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(|e| format!("HTTP 客户端创建失败: {}", e))
+    let mut builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20));
+
+    // 自动读取代理环境变量（HTTPS_PROXY > HTTP_PROXY）
+    let proxy_url = std::env::var("HTTPS_PROXY")
+        .or_else(|_| std::env::var("https_proxy"))
+        .or_else(|_| std::env::var("HTTP_PROXY"))
+        .or_else(|_| std::env::var("http_proxy"));
+
+    if let Ok(url) = proxy_url {
+        // 检测代理是否可达：解析 host:port 并尝试 TCP 连接
+        let proxy_reachable = (|| {
+            let parsed = url.trim_start_matches("http://").trim_start_matches("https://");
+            let addr = parsed.trim_end_matches('/').to_string();
+            std::net::TcpStream::connect_timeout(&addr.parse::<std::net::SocketAddr>().ok()?, std::time::Duration::from_secs(2)).ok()
+        })();
+
+        if proxy_reachable.is_some() {
+            if let Ok(proxy) = reqwest::Proxy::all(&url) {
+                log::info!("[HTTP] 使用代理: {}", url);
+                builder = builder.proxy(proxy);
+            }
+        } else {
+            log::info!("[HTTP] 代理不可达，直连: {}", url);
+        }
+    } else {
+        log::info!("[HTTP] 未检测到代理环境变量，直连");
+    }
+
+    builder.build().map_err(|e| format!("HTTP 客户端创建失败: {}", e))
 }
 
 /// Firebase signInWithPassword 获取 ID token
@@ -94,6 +121,7 @@ async fn auth1_login(email: &str, password: &str) -> Result<String, String> {
         .map_err(|e| format!("Auth1 请求失败: {}", e))?;
     
     #[derive(Deserialize)]
+    #[allow(non_snake_case)]
     struct Auth1Response {
         sessionToken: Option<String>,
         error: Option<FirebaseError>,
@@ -252,30 +280,64 @@ fn open_windsurf_uri(uri: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 统一登录：优先 Auth1，失败回退 Firebase
+async fn login_with_fallback(email: &str, password: &str) -> Result<String, String> {
+    match auth1_login(email, password).await {
+        Ok(token) => {
+            log::info!("[登录] Auth1 成功");
+            Ok(token)
+        }
+        Err(auth1_err) => {
+            log::warn!("[登录] Auth1 失败: {}，尝试 Firebase...", auth1_err);
+            match firebase_login(email, password).await {
+                Ok(token) => {
+                    log::info!("[登录] Firebase 成功");
+                    Ok(token)
+                }
+                Err(fb_err) => {
+                    Err(format!("Auth1 和 Firebase 均失败: Auth1({}) Firebase({})", auth1_err, fb_err))
+                }
+            }
+        }
+    }
+}
+
+/// 后台刷新额度：注册 Codeium → 查询额度 → 更新数据库 + 自动耗尽标记
+fn spawn_credits_refresh(pool: Arc<AccountPool>, email: String, token: String) {
+    tokio::spawn(async move {
+        log::info!("[后台] 尝试注册 Codeium 获取额度: {}", email);
+
+        if let Ok(api_key) = register_codeium(&token).await {
+            if let Ok(credits) = get_user_status(&api_key).await {
+                let _ = pool.update_account_credits(
+                    &email,
+                    Some(&api_key),
+                    Some(&credits.plan_name),
+                    Some(credits.daily_percent),
+                    Some(credits.weekly_percent),
+                );
+
+                // 自动耗尽标记（<=0 视为耗尽）
+                let daily_exhausted = credits.daily_percent <= 0.0;
+                let weekly_exhausted = credits.weekly_percent <= 0.0;
+                let _ = pool.update_exhausted_flags(
+                    &email,
+                    Some(daily_exhausted),
+                    Some(weekly_exhausted),
+                );
+                log::info!("[后台] 额度更新成功: {} plan={} daily={:.0}% weekly={:.0}%",
+                    email, credits.plan_name, credits.daily_percent, credits.weekly_percent);
+            }
+        }
+    });
+}
+
 #[tauri::command]
 pub async fn switch_windsurf_account(state: State<'_, AppState>, email: String, password: Option<String>) -> Result<SwitchAccountResult, String> {
     let pw = password.unwrap_or_else(|| email.clone());
     log::info!("[一键登录] 开始登录 {}", email);
 
-    // 优先尝试 Auth1，失败再尝试 Firebase
-    let token = match auth1_login(&email, &pw).await {
-        Ok(token) => {
-            log::info!("[一键登录] Auth1 成功，正在切换...");
-            token
-        }
-        Err(auth1_err) => {
-            log::warn!("[一键登录] Auth1 失败: {}，尝试 Firebase...", auth1_err);
-            match firebase_login(&email, &pw).await {
-                Ok(token) => {
-                    log::info!("[一键登录] Firebase 成功，正在切换...");
-                    token
-                }
-                Err(fb_err) => {
-                    return Err(format!("Auth1 和 Firebase 均失败: Auth1({}) Firebase({})", auth1_err, fb_err));
-                }
-            }
-        }
-    };
+    let token = login_with_fallback(&email, &pw).await?;
 
     let uri = format!("windsurf://codeium.windsurf/#access_token={}", urlencoding::encode(&token));
     open_windsurf_uri(&uri)?;
@@ -287,36 +349,11 @@ pub async fn switch_windsurf_account(state: State<'_, AppState>, email: String, 
         *current = Some(email.clone());
     }
 
-    // 后台尝试注册 Codeium 获取 apiKey 和额度（不阻塞登录结果）
-    let pool_clone = Arc::clone(&state.pool);
-    let email_clone = email.clone();
-    tokio::spawn(async move {
-        log::info!("[后台] 尝试注册 Codeium 获取额度: {}", email_clone);
-        
-        // 先尝试用当前 token 注册
-        if let Ok(api_key) = register_codeium(&token).await {
-            if let Ok(credits) = get_user_status(&api_key).await {
-                let _ = pool_clone.update_account_credits(
-                    &email_clone,
-                    Some(&api_key),
-                    Some(&credits.plan_name),
-                    Some(credits.daily_percent),
-                    Some(credits.weekly_percent),
-                );
+    // 更新上次使用时间和使用次数
+    let _ = state.pool.mark_account_used(&email);
 
-                // B 方案：自动耗尽标记（<=0 视为耗尽）
-                let daily_exhausted = credits.daily_percent <= 0.0;
-                let weekly_exhausted = credits.weekly_percent <= 0.0;
-                let _ = pool_clone.update_exhausted_flags(
-                    &email_clone,
-                    Some(daily_exhausted),
-                    Some(weekly_exhausted),
-                );
-                log::info!("[后台] 额度更新成功: {} plan={} daily={:.0}% weekly={:.0}%", 
-                    email_clone, credits.plan_name, credits.daily_percent, credits.weekly_percent);
-            }
-        }
-    });
+    // 后台刷新额度
+    spawn_credits_refresh(Arc::clone(&state.pool), email.clone(), token);
 
     Ok(SwitchAccountResult {
         email: email.clone(),
@@ -339,25 +376,7 @@ pub async fn take_and_switch(state: State<'_, AppState>) -> Result<SwitchAccount
     let email = take_result.email;
     log::info!("[一键登录] 取用账号: {}", email);
 
-    // 优先尝试 Auth1，失败再尝试 Firebase
-    let token = match auth1_login(&email, &email).await {
-        Ok(token) => {
-            log::info!("[一键登录] Auth1 成功");
-            token
-        }
-        Err(auth1_err) => {
-            log::warn!("[一键登录] Auth1 失败: {}，尝试 Firebase...", auth1_err);
-            match firebase_login(&email, &email).await {
-                Ok(token) => {
-                    log::info!("[一键登录] Firebase 成功");
-                    token
-                }
-                Err(fb_err) => {
-                    return Err(format!("Auth1 和 Firebase 均失败: Auth1({}) Firebase({})", auth1_err, fb_err));
-                }
-            }
-        }
-    };
+    let token = login_with_fallback(&email, &email).await?;
 
     let uri = format!("windsurf://codeium.windsurf/#access_token={}", urlencoding::encode(&token));
     open_windsurf_uri(&uri)?;
@@ -368,35 +387,8 @@ pub async fn take_and_switch(state: State<'_, AppState>) -> Result<SwitchAccount
         *current = Some(email.clone());
     }
 
-    // 后台尝试注册 Codeium 获取 apiKey 和额度（不阻塞登录结果）
-    let pool_clone = Arc::clone(&state.pool);
-    let email_clone = email.clone();
-    tokio::spawn(async move {
-        log::info!("[后台] 尝试注册 Codeium 获取额度: {}", email_clone);
-        
-        if let Ok(api_key) = register_codeium(&token).await {
-            if let Ok(credits) = get_user_status(&api_key).await {
-                let _ = pool_clone.update_account_credits(
-                    &email_clone,
-                    Some(&api_key),
-                    Some(&credits.plan_name),
-                    Some(credits.daily_percent),
-                    Some(credits.weekly_percent),
-                );
-
-                // B 方案：自动耗尽标记（<=0 视为耗尽）
-                let daily_exhausted = credits.daily_percent <= 0.0;
-                let weekly_exhausted = credits.weekly_percent <= 0.0;
-                let _ = pool_clone.update_exhausted_flags(
-                    &email_clone,
-                    Some(daily_exhausted),
-                    Some(weekly_exhausted),
-                );
-                log::info!("[后台] 额度更新成功: {} plan={} daily={:.0}% weekly={:.0}%", 
-                    email_clone, credits.plan_name, credits.daily_percent, credits.weekly_percent);
-            }
-        }
-    });
+    // 后台刷新额度
+    spawn_credits_refresh(Arc::clone(&state.pool), email.clone(), token);
 
     Ok(SwitchAccountResult {
         email: email.clone(),
@@ -477,8 +469,43 @@ pub fn import_from_json(state: State<AppState>, json_content: String) -> Result<
 }
 
 #[tauri::command]
-pub fn check_reset(state: State<AppState>) -> Result<(), String> {
-    state.pool.check_and_reset().map_err(|e| e.to_string())
+pub async fn check_reset(state: State<'_, AppState>) -> Result<String, String> {
+    // 1. 先重置配额
+    state.pool.check_and_reset().map_err(|e| e.to_string())?;
+
+    // 2. 批量刷新所有有 apiKey 的账号额度
+    let accounts = state.pool.get_accounts().map_err(|e| e.to_string())?;
+    let mut refreshed = 0;
+    let mut failed = 0;
+
+    for account in &accounts {
+        if let Some(ref api_key) = account.api_key {
+            match get_user_status(api_key).await {
+                Ok(credits) => {
+                    let _ = state.pool.update_account_credits(
+                        &account.email,
+                        Some(api_key),
+                        Some(&credits.plan_name),
+                        Some(credits.daily_percent),
+                        Some(credits.weekly_percent),
+                    );
+                    let daily_exhausted = credits.daily_percent <= 0.0;
+                    let weekly_exhausted = credits.weekly_percent <= 0.0;
+                    let _ = state.pool.update_exhausted_flags(
+                        &account.email,
+                        Some(daily_exhausted),
+                        Some(weekly_exhausted),
+                    );
+                    refreshed += 1;
+                }
+                Err(_) => {
+                    failed += 1;
+                }
+            }
+        }
+    }
+
+    Ok(format!("配额已重置，额度已刷新: {} 成功, {} 失败", refreshed, failed))
 }
 
 #[tauri::command]
@@ -493,54 +520,23 @@ pub fn get_current_account(state: State<AppState>) -> Result<Option<String>, Str
 }
 
 #[tauri::command]
-pub async fn switch_account_via_cli(state: State<'_, AppState>, email: String, script_path: Option<String>) -> Result<SwitchAccountResult, String> {
+pub async fn switch_account_via_cli(state: State<'_, AppState>, email: String) -> Result<SwitchAccountResult, String> {
     log::info!("[CLI 备选] 调用 Python 脚本切换账号: {}", email);
 
-    // 确定脚本路径优先级：传入参数 > AppState配置 > 数据目录 > 常见位置
-    let script_path = if let Some(path) = script_path {
-        PathBuf::from(path)
-    } else {
-        // 1. 先检查 AppState 中配置的脚本路径
-        let data_dir = state.pool.get_data_dir();
-        let configured_path = data_dir.join("switch_windsurf_account.py");
-        if configured_path.exists() {
-            log::info!("[CLI 备选] 使用数据目录中的脚本: {:?}", configured_path);
-            configured_path
-        } else {
-            // 2. 尝试其他常见位置
-            let possible_paths = [
-                "../docs/switch_windsurf_account.py",
-                "../../docs/switch_windsurf_account.py",
-                "./docs/switch_windsurf_account.py",
-                "/home/zhengxueen/workspace/ConfigFlowRegister/docs/switch_windsurf_account.py",
-            ];
-            
-            let mut found_path = None;
-            for path in &possible_paths {
-                let p = PathBuf::from(path);
-                if p.exists() {
-                    found_path = Some(p);
-                    log::info!("[CLI 备选] 找到脚本: {}", path);
-                    break;
-                }
-            }
-            
-            found_path.ok_or_else(|| {
-                format!("未找到 switch_windsurf_account.py 脚本。请将脚本放在以下位置之一：\n\
-                - {:?} (推荐，与数据库同目录)\n\
-                - ../docs/switch_windsurf_account.py\n\
-                - ./docs/switch_windsurf_account.py", 
-                data_dir.join("switch_windsurf_account.py"))
-            })?
-        }
-    };
+    // 只从数据目录查找脚本
+    let data_dir = state.pool.get_data_dir();
+    let script_path = data_dir.join("switch_windsurf_account.py");
+    if !script_path.exists() {
+        return Err(format!("未找到脚本: {:?}，请将 switch_windsurf_account.py 放到数据目录", script_path));
+    }
 
-    // 异步执行 Python 脚本（使用 auto 模式，让脚本自动选择 auth1 或 firebase）
+    // --login-only --open：仅登录+打开URI，跳过 Codeium 注册
     let output = tokio::process::Command::new("python3")
         .arg(&script_path)
         .arg(&email)
         .arg("--method")
         .arg("auto")
+        .arg("--login-only")
         .arg("--open")
         .output()
         .await
@@ -551,6 +547,16 @@ pub async fn switch_account_via_cli(state: State<'_, AppState>, email: String, s
 
     if output.status.success() {
         log::info!("[CLI 备选] 脚本执行成功: {}", stdout);
+
+        // 记录当前登录账号
+        {
+            let mut current = state.current_account.lock().map_err(|_| "锁错误")?;
+            *current = Some(email.clone());
+        }
+
+        // 更新上次使用时间和使用次数
+        let _ = state.pool.mark_account_used(&email);
+
         Ok(SwitchAccountResult {
             email: email.clone(),
             message: format!("已通过 CLI 切换到 {}", email),

@@ -297,6 +297,13 @@ impl AccountPool {
         let db = self.db.lock().map_err(|_| anyhow::anyhow!("数据库锁错误"))?;
         db.get_account_by_email(email)
     }
+
+    /// 更新账号上次使用时间和使用次数
+    pub fn mark_account_used(&self, email: &str) -> Result<()> {
+        let mut db = self.db.lock().map_err(|_| anyhow::anyhow!("数据库锁错误"))?;
+        db.mark_account_used(email)?;
+        Ok(())
+    }
 }
 
 fn format_duration(duration: Duration) -> String {

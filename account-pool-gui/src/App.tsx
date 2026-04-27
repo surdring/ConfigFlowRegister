@@ -215,7 +215,7 @@ function App() {
     setCliSwitchingEmail(email);
     try {
       // 不传 script_path，让后端自动查找
-      const result = await invoke<SwitchAccountResult>('switch_account_via_cli', { email, script_path: null });
+      const result = await invoke<SwitchAccountResult>('switch_account_via_cli', { email });
       if (result.success) {
         toast.success(result.message);
         setCurrentAccount(email);
@@ -280,13 +280,19 @@ function App() {
     }
   };
 
+  const [resetting, setResetting] = useState(false);
+
   const handleCheckReset = async () => {
+    if (resetting) return;
+    setResetting(true);
     try {
-      await invoke('check_reset');
-      toast.success('重置检查完成');
+      const result = await invoke<string>('check_reset');
+      toast.success(result);
       await loadData();
     } catch (error) {
       toast.error('检查失败: ' + error);
+    } finally {
+      setResetting(false);
     }
   };
 
@@ -401,12 +407,12 @@ function App() {
                   当前登录: {currentAccount}
                 </span>
               )}
-              <span className="text-sm text-gray-500">策略: Round Robin</span>
               <button
                 onClick={handleCheckReset}
-                className="px-4 py-2 bg-[#5A4A8D] text-white rounded-lg hover:bg-[#6B5A9D] active:bg-[#4A3A7D] transition-colors"
+                disabled={resetting}
+                className="px-4 py-2 bg-[#5A4A8D] text-white rounded-lg hover:bg-[#6B5A9D] active:bg-[#4A3A7D] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                检查重置
+                {resetting ? '正在刷新额度...' : '检查重置'}
               </button>
             </div>
           </div>

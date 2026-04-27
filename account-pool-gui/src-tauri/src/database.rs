@@ -5,6 +5,9 @@ use anyhow::{Context, Result as AnyhowResult};
 
 use crate::models::{Account, AccountStatus, PoolConfig, PoolState, PoolStats, Strategy};
 
+/// accounts 表的 SELECT 列名列表（避免重复拼写）
+const ACCOUNT_COLUMNS: &str = "email, status, daily_exhausted, weekly_exhausted, last_used_at, total_uses, notes, api_key, plan_name, daily_percent, weekly_percent, credits_updated_at";
+
 pub struct Database {
     conn: Connection,
 }
@@ -152,7 +155,7 @@ impl Database {
 
     pub fn get_all_accounts(&self) -> AnyhowResult<Vec<Account>> {
         let mut stmt = self.conn.prepare(
-            "SELECT email, status, daily_exhausted, weekly_exhausted, last_used_at, total_uses, notes, api_key, plan_name, daily_percent, weekly_percent, credits_updated_at FROM accounts ORDER BY email"
+            &format!("SELECT {} FROM accounts ORDER BY email", ACCOUNT_COLUMNS)
         )?;
         let accounts: Vec<Account> = stmt.query_map([], Self::row_to_account)?.filter_map(|a| a.ok()).collect();
         Ok(accounts)
@@ -179,8 +182,8 @@ impl Database {
         
         let where_sql = if where_clauses.is_empty() { "".to_string() } else { format!("WHERE {}", where_clauses.join(" AND ")) };
         let sql = format!(
-            "SELECT email, status, daily_exhausted, weekly_exhausted, last_used_at, total_uses, notes, api_key, plan_name, daily_percent, weekly_percent, credits_updated_at FROM accounts {} ORDER BY email LIMIT ? OFFSET ?",
-            where_sql
+            "SELECT {} FROM accounts {} ORDER BY email LIMIT ? OFFSET ?",
+            ACCOUNT_COLUMNS, where_sql
         );
         
         params_vec.push(Box::new(limit));
@@ -241,7 +244,7 @@ impl Database {
 
     pub fn get_account_by_email(&self, email: &str) -> AnyhowResult<Option<Account>> {
         let mut stmt = self.conn.prepare(
-            "SELECT email, status, daily_exhausted, weekly_exhausted, last_used_at, total_uses, notes, api_key, plan_name, daily_percent, weekly_percent, credits_updated_at FROM accounts WHERE email = ?"
+            &format!("SELECT {} FROM accounts WHERE email = ?", ACCOUNT_COLUMNS)
         )?;
         let result = stmt.query_row([email], Self::row_to_account);
         match result {
