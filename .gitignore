@@ -89,3 +89,7 @@ account-pool-gui/src-tauri/target/release/bundle/
 *.db-shm
 *.db-wal
 account_pool.db
+
+# 下载的 Windsurf API 工具
+WindsurfAPI-master/
+WindsurfAPI-master.zip
