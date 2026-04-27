@@ -124,7 +124,7 @@ def register_codeium(token):
     return data
 
 # ─── Main logic ───────────────────────────────────────────
-def switch_account(email, password=None, method='auto', open_uri=False):
+def switch_account(email, password=None, method='auto', open_uri=False, login_only=False):
     if password is None:
         password = email  # 默认密码=邮箱
 
@@ -151,16 +151,17 @@ def switch_account(email, password=None, method='auto', open_uri=False):
         print('[失败] 所有登录方式均失败')
         return False
 
-    # 尝试 Codeium 注册获取 apiKey（用于直接写入 state.vscdb 的备选方案）
-    reg_token = tokens.get('firebase_id_token') or tokens.get('oneTimeAuthToken')
-    if reg_token:
-        try:
-            reg = register_codeium(reg_token)
-            if reg:
-                tokens['apiKey'] = reg.get('api_key', '')
-                tokens['apiServerUrl'] = reg.get('api_server_url', '')
-        except Exception as e:
-            print(f'[Codeium] 注册异常: {e}')
+    # login_only 模式跳过 Codeium 注册和 URI 打开（由 Rust 端接管）
+    if not login_only:
+        reg_token = tokens.get('firebase_id_token') or tokens.get('oneTimeAuthToken')
+        if reg_token:
+            try:
+                reg = register_codeium(reg_token)
+                if reg:
+                    tokens['apiKey'] = reg.get('api_key', '')
+                    tokens['apiServerUrl'] = reg.get('api_server_url', '')
+            except Exception as e:
+                print(f'[Codeium] 注册异常: {e}')
 
     # 构造 windsurf:// URI
     # Windsurf 扩展期望 access_token 是 Firebase ID token
@@ -190,7 +191,16 @@ def switch_account(email, password=None, method='auto', open_uri=False):
     tokens_file.write_text(json.dumps(tokens, indent=2, ensure_ascii=False))
     print(f'Tokens 已保存到 {tokens_file}')
 
-    if open_uri:
+    if login_only:
+        print(f'[login-only] 仅登录，跳过注册')
+        if open_uri:
+            print(f'正在打开 windsurf URI...')
+            try:
+                subprocess.run(['xdg-open', uri], check=True, timeout=10)
+                print('URI 已发送')
+            except Exception as e:
+                print(f'打开失败: {e}')
+    elif open_uri:
         print(f'\n正在打开 windsurf URI...')
         try:
             subprocess.run(['xdg-open', uri], check=True, timeout=10)
@@ -211,6 +221,7 @@ def main():
     parser.add_argument('--method', choices=['auto', 'auth1', 'firebase'], default='auto',
                         help='登录方式（默认 auto）')
     parser.add_argument('--open', action='store_true', help='自动打开 windsurf URI')
+    parser.add_argument('--login-only', action='store_true', help='仅登录保存 tokens，跳过注册和打开 URI（由外部调用方接管）')
     parser.add_argument('--retry', type=int, default=1, help='重试次数（默认1）')
     
     args = parser.parse_args()
@@ -221,7 +232,7 @@ def main():
             print(f'\n--- 重试 {attempt + 1}/{args.retry} ---')
             time.sleep(3)
         
-        if switch_account(args.email, password, args.method, args.open):
+        if switch_account(args.email, password, args.method, args.open, args.login_only):
             return
     
     print(f'\n[失败] {args.retry} 次尝试均失败')
