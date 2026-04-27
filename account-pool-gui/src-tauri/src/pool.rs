@@ -8,6 +8,7 @@ use crate::models::{Account, ImportResult, PoolStats, ResetInfo, TakeAccountResu
 
 pub struct AccountPool {
     db: Mutex<Database>,
+    data_dir: PathBuf,
 }
 
 impl AccountPool {
@@ -20,7 +21,12 @@ impl AccountPool {
         
         Ok(Self {
             db: Mutex::new(db),
+            data_dir,
         })
+    }
+
+    pub fn get_data_dir(&self) -> &PathBuf {
+        &self.data_dir
     }
 
     pub fn get_accounts(&self) -> Result<Vec<Account>> {
@@ -265,6 +271,31 @@ impl AccountPool {
             daily_reset_in,
             weekly_reset_in,
         })
+    }
+
+    /// 更新账号额度信息
+    pub fn update_account_credits(&self, email: &str, api_key: Option<&str>, plan_name: Option<&str>, daily_percent: Option<f64>, weekly_percent: Option<f64>) -> Result<()> {
+        let mut db = self.db.lock().map_err(|_| anyhow::anyhow!("数据库锁错误"))?;
+        db.update_account_credits(email, api_key, plan_name, daily_percent, weekly_percent)
+    }
+
+    /// 更新账号耗尽标记（None 表示不修改对应字段）
+    pub fn update_exhausted_flags(&self, email: &str, daily: Option<bool>, weekly: Option<bool>) -> Result<()> {
+        let mut db = self.db.lock().map_err(|_| anyhow::anyhow!("数据库锁错误"))?;
+        db.update_exhausted_flags(email, daily, weekly)?;
+        Ok(())
+    }
+
+    /// 获取账号 api_key
+    pub fn get_account_api_key(&self, email: &str) -> Result<Option<String>> {
+        let db = self.db.lock().map_err(|_| anyhow::anyhow!("数据库锁错误"))?;
+        db.get_account_api_key(email)
+    }
+
+    /// 获取单个账号
+    pub fn get_account_by_email(&self, email: &str) -> Result<Option<Account>> {
+        let db = self.db.lock().map_err(|_| anyhow::anyhow!("数据库锁错误"))?;
+        db.get_account_by_email(email)
     }
 }
 

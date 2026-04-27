@@ -18,14 +18,31 @@ interface RowData {
   formatDate: (date: string | null) => string;
   onSwitchAccount: (email: string) => void;
   switchingEmail: string | null;
+  onCliSwitchAccount: (email: string) => void;
+  cliSwitchingEmail: string | null;
+  onRefreshCredits: (email: string) => void;
+  refreshingCreditsEmail: string | null;
 }
 
 const TableRow = memo(({ index, data }: { index: number; data: RowData }) => {
-  const { accounts, selectedEmails, toggleSelect, formatDate, onSwitchAccount, switchingEmail } = data;
+  const { accounts, selectedEmails, toggleSelect, formatDate, onSwitchAccount, switchingEmail, onCliSwitchAccount, cliSwitchingEmail, onRefreshCredits, refreshingCreditsEmail } = data;
   const account = accounts[index];
   if (!account) return null;
   const isEven = index % 2 === 0;
   const isSwitching = switchingEmail === account.email;
+  const isCliSwitching = cliSwitchingEmail === account.email;
+  const isRefreshing = refreshingCreditsEmail === account.email;
+
+  // 额度显示
+  const creditText = account.daily_percent !== null || account.weekly_percent !== null
+    ? `${account.plan_name || ''} ${account.daily_percent !== null ? `日${Math.round(account.daily_percent)}%` : ''} ${account.weekly_percent !== null ? `周${Math.round(account.weekly_percent)}%` : ''}`.trim()
+    : '-';
+
+  const creditColor = account.daily_percent !== null && account.daily_percent < 20
+    ? 'text-[#E05656]'
+    : account.daily_percent !== null && account.daily_percent < 50
+      ? 'text-[#E6A23C]'
+      : 'text-[#20B2AA]';
 
   return (
     <div className={`flex h-8 border-b border-gray-100 hover:bg-[#5A4A8D]/5 transition-colors ${isEven ? 'bg-white' : 'bg-gray-50'}`}>
@@ -37,8 +54,8 @@ const TableRow = memo(({ index, data }: { index: number; data: RowData }) => {
           className="rounded border-gray-300 h-3 w-3"
         />
       </div>
-      <div className="px-2 w-[32%] text-xs font-medium text-gray-900 truncate flex items-center min-w-0">{account.email}</div>
-      <div className="px-2 w-[10%] flex items-center justify-center flex-shrink-0">
+      <div className="px-2 w-[30%] text-xs font-medium text-gray-900 truncate flex items-center min-w-0">{account.email}</div>
+      <div className="px-2 w-[8%] flex items-center justify-center flex-shrink-0">
         <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
           account.weekly_exhausted ? 'bg-[#E05656]/10 text-[#E05656]' :
           account.daily_exhausted ? 'bg-[#E6A23C]/10 text-[#E6A23C]' :
@@ -48,15 +65,12 @@ const TableRow = memo(({ index, data }: { index: number; data: RowData }) => {
            account.daily_exhausted ? '日耗尽' : '可用'}
         </span>
       </div>
-      <div className="px-2 w-[10%] text-xs text-gray-600 flex items-center justify-center flex-shrink-0">
-        {account.daily_exhausted ? '✗' : '✓'}
+      <div className="px-2 w-[14%] text-[10px] font-medium flex items-center justify-center flex-shrink-0 truncate" title={creditText}>
+        <span className={creditColor}>{creditText}</span>
       </div>
-      <div className="px-2 w-[10%] text-xs text-gray-600 flex items-center justify-center flex-shrink-0">
-        {account.weekly_exhausted ? '✗' : '✓'}
-      </div>
-      <div className="px-2 w-[10%] text-xs text-gray-600 flex items-center justify-center flex-shrink-0">{account.total_uses}</div>
-      <div className="px-2 w-[12%] text-xs text-gray-600 flex items-center justify-center flex-shrink-0">{formatDate(account.last_used_at)}</div>
-      <div className="px-2 w-[16%] flex items-center justify-center flex-shrink-0">
+      <div className="px-2 w-[8%] text-xs text-gray-600 flex items-center justify-center flex-shrink-0">{account.total_uses}</div>
+      <div className="px-2 w-[10%] text-xs text-gray-600 flex items-center justify-center flex-shrink-0">{formatDate(account.last_used_at)}</div>
+      <div className="px-2 w-[18%] flex items-center justify-center gap-1 flex-shrink-0">
         <button
           onClick={() => onSwitchAccount(account.email)}
           disabled={isSwitching}
@@ -66,7 +80,31 @@ const TableRow = memo(({ index, data }: { index: number; data: RowData }) => {
               : 'bg-[#5A4A8D]/10 text-[#5A4A8D] hover:bg-[#5A4A8D]/20 active:bg-[#5A4A8D]/30'
           }`}
         >
-          {isSwitching ? '登录中...' : '一键登录'}
+          {isSwitching ? '登录中...' : '登录'}
+        </button>
+        <button
+          onClick={() => onCliSwitchAccount(account.email)}
+          disabled={isCliSwitching}
+          title="CLI 脚本登录"
+          className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
+            isCliSwitching 
+              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+              : 'bg-[#20B2AA]/10 text-[#0D9488] hover:bg-[#20B2AA]/20 active:bg-[#20B2AA]/30'
+          }`}
+        >
+          {isCliSwitching ? 'CLI中...' : 'CLI'}
+        </button>
+        <button
+          onClick={() => onRefreshCredits(account.email)}
+          disabled={isRefreshing}
+          title="刷新额度信息"
+          className={`px-1.5 py-0.5 text-[10px] font-medium rounded transition-colors ${
+            isRefreshing
+              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+          }`}
+        >
+          {isRefreshing ? '⟳' : '⟳'}
         </button>
       </div>
     </div>
@@ -87,6 +125,8 @@ function App() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [switchingEmail, setSwitchingEmail] = useState<string | null>(null);
+  const [cliSwitchingEmail, setCliSwitchingEmail] = useState<string | null>(null);
+  const [refreshingCreditsEmail, setRefreshingCreditsEmail] = useState<string | null>(null);
   const [currentAccount, setCurrentAccount] = useState<string | null>(null);
 
   // 分页计算
@@ -168,6 +208,41 @@ function App() {
       toast.error('一键登录失败: ' + error);
     } finally {
       setSwitchingEmail(null);
+    }
+  };
+
+  const handleCliSwitchAccount = async (email: string) => {
+    setCliSwitchingEmail(email);
+    try {
+      // 不传 script_path，让后端自动查找
+      const result = await invoke<SwitchAccountResult>('switch_account_via_cli', { email, script_path: null });
+      if (result.success) {
+        toast.success(result.message);
+        setCurrentAccount(email);
+      } else {
+        toast.error(result.message);
+      }
+    } catch (error) {
+      toast.error('CLI 登录失败: ' + error);
+    } finally {
+      setCliSwitchingEmail(null);
+    }
+  };
+
+  const handleRefreshCredits = async (email: string) => {
+    setRefreshingCreditsEmail(email);
+    try {
+      const result = await invoke<SwitchAccountResult>('refresh_account_credits', { email });
+      if (result.success) {
+        toast.success(result.message);
+        await loadData();
+      } else {
+        toast.error(result.message);
+      }
+    } catch (error) {
+      toast.error('刷新额度失败: ' + error);
+    } finally {
+      setRefreshingCreditsEmail(null);
     }
   };
 
@@ -490,13 +565,12 @@ function App() {
                 className="rounded border-gray-300"
               />
             </div>
-            <div className="px-2 py-2 w-[32%] text-xs font-medium text-gray-700 flex items-center min-w-0">邮箱</div>
-            <div className="px-2 py-2 w-[10%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">状态</div>
-            <div className="px-2 py-2 w-[10%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">日配额</div>
-            <div className="px-2 py-2 w-[10%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">周配额</div>
-            <div className="px-2 py-2 w-[10%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">累计使用</div>
-            <div className="px-2 py-2 w-[12%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">上次使用</div>
-            <div className="px-2 py-2 w-[16%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">操作</div>
+            <div className="px-2 py-2 w-[30%] text-xs font-medium text-gray-700 flex items-center min-w-0">邮箱</div>
+            <div className="px-2 py-2 w-[8%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">状态</div>
+            <div className="px-2 py-2 w-[14%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">额度</div>
+            <div className="px-2 py-2 w-[8%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">累计使用</div>
+            <div className="px-2 py-2 w-[10%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">上次使用</div>
+            <div className="px-2 py-2 w-[18%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">操作</div>
           </div>
 
           {/* Virtual List Body */}
@@ -515,6 +589,10 @@ function App() {
                       formatDate,
                       onSwitchAccount: handleSwitchAccount,
                       switchingEmail,
+                      onCliSwitchAccount: handleCliSwitchAccount,
+                      cliSwitchingEmail,
+                      onRefreshCredits: handleRefreshCredits,
+                      refreshingCreditsEmail,
                     }}
                   />
                 )}

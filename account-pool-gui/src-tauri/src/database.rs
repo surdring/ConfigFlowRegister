@@ -16,9 +16,32 @@ impl Database {
         
         let mut db = Self { conn };
         db.init_tables()?;
+        db.migrate()?;
         db.init_default_data()?;
         
         Ok(db)
+    }
+
+    /// 迁移：为旧表添加新列
+    fn migrate(&mut self) -> AnyhowResult<()> {
+        let columns = self.conn.prepare("SELECT * FROM accounts LIMIT 0")?;
+        let existing: Vec<String> = columns.column_names().iter().map(|s| s.to_string()).collect();
+        
+        let migrations = [
+            ("api_key", "ALTER TABLE accounts ADD COLUMN api_key TEXT DEFAULT NULL"),
+            ("plan_name", "ALTER TABLE accounts ADD COLUMN plan_name TEXT DEFAULT NULL"),
+            ("daily_percent", "ALTER TABLE accounts ADD COLUMN daily_percent REAL DEFAULT NULL"),
+            ("weekly_percent", "ALTER TABLE accounts ADD COLUMN weekly_percent REAL DEFAULT NULL"),
+            ("credits_updated_at", "ALTER TABLE accounts ADD COLUMN credits_updated_at TEXT DEFAULT NULL"),
+        ];
+        
+        for (col, sql) in &migrations {
+            if !existing.contains(&col.to_string()) {
+                self.conn.execute_batch(sql)?;
+            }
+        }
+        
+        Ok(())
     }
 
     fn init_tables(&mut self) -> AnyhowResult<()> {
@@ -31,7 +54,12 @@ impl Database {
                 weekly_exhausted INTEGER DEFAULT 0,
                 last_used_at TEXT DEFAULT NULL,
                 total_uses INTEGER DEFAULT 0,
-                notes TEXT DEFAULT ''
+                notes TEXT DEFAULT '',
+                api_key TEXT DEFAULT NULL,
+                plan_name TEXT DEFAULT NULL,
+                daily_percent REAL DEFAULT NULL,
+                weekly_percent REAL DEFAULT NULL,
+                credits_updated_at TEXT DEFAULT NULL
             );
 
             CREATE INDEX IF NOT EXISTS idx_status ON accounts(status);
@@ -101,6 +129,11 @@ impl Database {
             NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S").ok()
                 .map(|dt| DateTime::from_naive_utc_and_offset(dt, Utc))
         });
+        let credits_updated_at: Option<String> = row.get(11)?;
+        let credits_updated_at = credits_updated_at.and_then(|s| {
+            NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S").ok()
+                .map(|dt| DateTime::from_naive_utc_and_offset(dt, Utc))
+        });
         Ok(Account {
             email: row.get(0)?,
             status,
@@ -109,12 +142,17 @@ impl Database {
             last_used_at,
             total_uses: row.get(5)?,
             notes: row.get(6)?,
+            api_key: row.get(7)?,
+            plan_name: row.get(8)?,
+            daily_percent: row.get(9)?,
+            weekly_percent: row.get(10)?,
+            credits_updated_at,
         })
     }
 
     pub fn get_all_accounts(&self) -> AnyhowResult<Vec<Account>> {
         let mut stmt = self.conn.prepare(
-            "SELECT email, status, daily_exhausted, weekly_exhausted, last_used_at, total_uses, notes FROM accounts ORDER BY email"
+            "SELECT email, status, daily_exhausted, weekly_exhausted, last_used_at, total_uses, notes, api_key, plan_name, daily_percent, weekly_percent, credits_updated_at FROM accounts ORDER BY email"
         )?;
         let accounts: Vec<Account> = stmt.query_map([], Self::row_to_account)?.filter_map(|a| a.ok()).collect();
         Ok(accounts)
@@ -141,7 +179,7 @@ impl Database {
         
         let where_sql = if where_clauses.is_empty() { "".to_string() } else { format!("WHERE {}", where_clauses.join(" AND ")) };
         let sql = format!(
-            "SELECT email, status, daily_exhausted, weekly_exhausted, last_used_at, total_uses, notes FROM accounts {} ORDER BY email LIMIT ? OFFSET ?",
+            "SELECT email, status, daily_exhausted, weekly_exhausted, last_used_at, total_uses, notes, api_key, plan_name, daily_percent, weekly_percent, credits_updated_at FROM accounts {} ORDER BY email LIMIT ? OFFSET ?",
             where_sql
         );
         
@@ -203,7 +241,7 @@ impl Database {
 
     pub fn get_account_by_email(&self, email: &str) -> AnyhowResult<Option<Account>> {
         let mut stmt = self.conn.prepare(
-            "SELECT email, status, daily_exhausted, weekly_exhausted, last_used_at, total_uses, notes FROM accounts WHERE email = ?"
+            "SELECT email, status, daily_exhausted, weekly_exhausted, last_used_at, total_uses, notes, api_key, plan_name, daily_percent, weekly_percent, credits_updated_at FROM accounts WHERE email = ?"
         )?;
         let result = stmt.query_row([email], Self::row_to_account);
         match result {
@@ -215,7 +253,7 @@ impl Database {
 
     pub fn add_account(&mut self, email: &str, notes: &str) -> AnyhowResult<()> {
         self.conn.execute(
-            "INSERT OR IGNORE INTO accounts (email, status, daily_exhausted, weekly_exhausted, total_uses, notes) VALUES (?, 'available', 0, 0, 0, ?)",
+            "INSERT OR IGNORE INTO accounts (email, status, daily_exhausted, weekly_exhausted, total_uses, notes, api_key, plan_name, daily_percent, weekly_percent, credits_updated_at) VALUES (?, 'available', 0, 0, 0, ?, NULL, NULL, NULL, NULL, NULL)",
             params![email, notes],
         )?;
         Ok(())
@@ -429,5 +467,25 @@ impl Database {
             |row| row.get(0),
         )?;
         Ok(count > 0)
+    }
+
+    /// 更新账号的 API key 和额度信息
+    pub fn update_account_credits(&mut self, email: &str, api_key: Option<&str>, plan_name: Option<&str>, daily_percent: Option<f64>, weekly_percent: Option<f64>) -> AnyhowResult<()> {
+        let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        self.conn.execute(
+            "UPDATE accounts SET api_key = ?, plan_name = ?, daily_percent = ?, weekly_percent = ?, credits_updated_at = ? WHERE email = ?",
+            params![api_key, plan_name, daily_percent, weekly_percent, now, email],
+        )?;
+        Ok(())
+    }
+
+    /// 获取账号的 api_key
+    pub fn get_account_api_key(&self, email: &str) -> AnyhowResult<Option<String>> {
+        let api_key: Option<String> = self.conn.query_row(
+            "SELECT api_key FROM accounts WHERE email = ?",
+            [email],
+            |row| row.get(0),
+        )?;
+        Ok(api_key)
     }
 }

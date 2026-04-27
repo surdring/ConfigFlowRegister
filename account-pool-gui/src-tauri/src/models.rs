@@ -10,6 +10,11 @@ pub struct Account {
     pub last_used_at: Option<DateTime<Utc>>,
     pub total_uses: i32,
     pub notes: String,
+    pub api_key: Option<String>,
+    pub plan_name: Option<String>,
+    pub daily_percent: Option<f64>,
+    pub weekly_percent: Option<f64>,
+    pub credits_updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -45,6 +50,16 @@ impl Account {
     pub fn is_available(&self) -> bool {
         self.status == AccountStatus::Available && !self.daily_exhausted
     }
+
+    /// 获取额度显示文本
+    pub fn credit_display(&self) -> String {
+        match (self.daily_percent, self.weekly_percent) {
+            (Some(d), Some(w)) => format!("日{:.0}% 周{:.0}%", d, w),
+            (Some(d), None) => format!("日{:.0}%", d),
+            (None, Some(w)) => format!("周{:.0}%", w),
+            (None, None) => "-".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +88,13 @@ pub struct PoolStats {
     pub available: i32,
     pub daily_exhausted: i32,
     pub weekly_exhausted: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreditInfo {
+    pub plan_name: String,
+    pub daily_percent: f64,
+    pub weekly_percent: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

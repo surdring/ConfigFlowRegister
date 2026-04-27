@@ -47,6 +47,8 @@ pub fn run() {
             commands::check_reset,
             commands::get_reset_info,
             commands::get_current_account,
+            commands::switch_account_via_cli,
+            commands::refresh_account_credits,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

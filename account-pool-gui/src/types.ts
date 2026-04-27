@@ -6,6 +6,11 @@ export interface Account {
   last_used_at: string | null;
   total_uses: number;
   notes: string;
+  api_key: string | null;
+  plan_name: string | null;
+  daily_percent: number | null;
+  weekly_percent: number | null;
+  credits_updated_at: string | null;
 }
 
 export interface PoolStats {
