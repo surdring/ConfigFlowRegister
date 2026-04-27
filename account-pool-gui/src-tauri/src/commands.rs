@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::State;
 use serde::{Deserialize, Serialize};
@@ -31,35 +30,186 @@ struct FirebaseError {
     message: Option<String>,
 }
 
+/// 获取系统代理配置（支持 GNOME gsettings）
+#[cfg(target_os = "linux")]
+fn get_system_proxy() -> Option<String> {
+    // 尝试读取 GNOME 系统代理设置
+    let modes = [
+        ("org.gnome.system.proxy", "mode"),
+        ("org.gnome.desktop.interface", "proxy-mode"),
+    ];
+    
+    for (schema, key) in &modes {
+        let mode = std::process::Command::new("gsettings")
+            .args(&["get", schema, key])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().trim_matches('\'').to_string());
+        
+        if let Some(m) = mode {
+            if m == "manual" || m == "1" {
+                // 读取 HTTP 代理设置
+                let proxy = std::process::Command::new("gsettings")
+                    .args(&["get", "org.gnome.system.proxy.http", "host"])
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| s.trim().trim_matches('\'').to_string());
+                
+                let port = std::process::Command::new("gsettings")
+                    .args(&["get", "org.gnome.system.proxy.http", "port"])
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .and_then(|s| s.trim().parse::<u16>().ok());
+                
+                if let (Some(host), Some(p)) = (proxy, port) {
+                    let url = format!("http://{}:{}", host, p);
+                    log::info!("[HTTP] 检测到 GNOME 系统代理: {}", url);
+                    return Some(url);
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+fn get_system_proxy() -> Option<String> {
+    None
+}
+
+/// 测试代理是否可达（支持域名解析）
+fn test_proxy_reachable(url: &str) -> bool {
+    let parsed = url.trim_start_matches("http://").trim_start_matches("https://");
+    let addr_part = parsed.trim_end_matches('/');
+    
+    // 解析 host:port
+    let parts: Vec<&str> = addr_part.split(':').collect();
+    if parts.len() != 2 {
+        return false;
+    }
+    
+    let host = parts[0];
+    let port: u16 = match parts[1].parse() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    
+    // 先尝试直接作为 SocketAddr 解析（IP 格式）
+    if let Ok(addr) = addr_part.parse::<std::net::SocketAddr>() {
+        return std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2)).is_ok();
+    }
+    
+    // 否则作为域名解析
+    match std::net::ToSocketAddrs::to_socket_addrs(&(host, port)) {
+        Ok(addrs) => {
+            for addr in addrs {
+                if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2)).is_ok() {
+                    log::info!("[HTTP] 代理 {} 解析到 {:?} 可达", url, addr);
+                    return true;
+                }
+            }
+            log::warn!("[HTTP] 代理 {} 解析成功但无可用地址", url);
+            false
+        }
+        Err(e) => {
+            log::warn!("[HTTP] 代理 {} DNS 解析失败: {}", url, e);
+            false
+        }
+    }
+}
+
+/// 分类网络错误类型，提供详细诊断信息
+fn classify_network_error(error: &reqwest::Error, host: &str) -> String {
+    let error_str = error.to_string().to_lowercase();
+    
+    // DNS 解析失败
+    if error_str.contains("dns") 
+        || error_str.contains("resolve") 
+        || error_str.contains("name") 
+        || error_str.contains("host not found")
+        || error_str.contains("nodename nor servname provided") {
+        return format!(
+            "DNS 解析失败 - 无法解析域名 '{}'. 可能原因: 1) DNS 服务器配置错误 2) 域名被污染 3) 网络连接断开. 建议: 检查 /etc/resolv.conf 或尝试更换 DNS (如 8.8.8.8)",
+            host
+        );
+    }
+    
+    // 连接超时或拒绝
+    if error_str.contains("timeout") {
+        return format!(
+            "连接超时 - 无法连接到 '{}'. 可能原因: 1) 防火墙阻止 2) 需要代理 3) 服务器无响应. 建议: 检查网络连通性 (ping {})",
+            host, host
+        );
+    }
+    
+    if error_str.contains("refused") || error_str.contains("reset") {
+        return format!(
+            "连接被拒绝 - 目标主机 '{}' 拒绝了连接. 可能原因: 1) 服务器未运行 2) 防火墙阻止 3) 路由问题",
+            host
+        );
+    }
+    
+    // TLS/SSL 错误
+    if error_str.contains("tls") 
+        || error_str.contains("ssl") 
+        || error_str.contains("certificate")
+        || error_str.contains("handshake") {
+        return format!(
+            "TLS/SSL 错误 - 与 '{}' 建立安全连接失败. 可能原因: 1) 系统时间不正确 2) 缺少 CA 证书 3) 证书被中间人篡改. 建议: 检查系统时间和更新 ca-certificates",
+            host
+        );
+    }
+    
+    // 代理相关错误
+    if error_str.contains("proxy") {
+        return format!(
+            "代理错误 - 通过代理连接到 '{}' 失败. 可能原因: 1) 代理服务器无响应 2) 代理配置错误 3) 代理需要认证",
+            host
+        );
+    }
+    
+    // 网络不可达
+    if error_str.contains("unreachable") 
+        || error_str.contains("network")
+        || error_str.contains("no route") {
+        return format!(
+            "网络不可达 - 无法路由到 '{}'. 可能原因: 1) 网络接口未启用 2) 网关配置错误 3) 目标网络不可达",
+            host
+        );
+    }
+    
+    // 默认返回原始错误
+    format!("{} (主机: {})", error, host)
+}
+
 /// 创建 HTTP 客户端（自动检测系统代理环境变量，代理不可达则直连）
 fn create_http_client() -> Result<reqwest::Client, String> {
     let mut builder = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20));
+        .timeout(std::time::Duration::from_secs(20))
+        .no_proxy()
+        .local_address(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
 
-    // 自动读取代理环境变量（HTTPS_PROXY > HTTP_PROXY）
+    // 优先读取环境变量（HTTPS_PROXY > HTTP_PROXY）
     let proxy_url = std::env::var("HTTPS_PROXY")
         .or_else(|_| std::env::var("https_proxy"))
         .or_else(|_| std::env::var("HTTP_PROXY"))
-        .or_else(|_| std::env::var("http_proxy"));
+        .or_else(|_| std::env::var("http_proxy"))
+        .or_else(|_| get_system_proxy().ok_or_else(|| String::new()));
 
     if let Ok(url) = proxy_url {
-        // 检测代理是否可达：解析 host:port 并尝试 TCP 连接
-        let proxy_reachable = (|| {
-            let parsed = url.trim_start_matches("http://").trim_start_matches("https://");
-            let addr = parsed.trim_end_matches('/').to_string();
-            std::net::TcpStream::connect_timeout(&addr.parse::<std::net::SocketAddr>().ok()?, std::time::Duration::from_secs(2)).ok()
-        })();
-
-        if proxy_reachable.is_some() {
+        if test_proxy_reachable(&url) {
             if let Ok(proxy) = reqwest::Proxy::all(&url) {
                 log::info!("[HTTP] 使用代理: {}", url);
                 builder = builder.proxy(proxy);
             }
         } else {
-            log::info!("[HTTP] 代理不可达，直连: {}", url);
+            log::warn!("[HTTP] 代理不可达，将尝试直连: {}", url);
         }
     } else {
-        log::info!("[HTTP] 未检测到代理环境变量，直连");
+        log::info!("[HTTP] 未检测到代理配置，使用直连");
     }
 
     builder.build().map_err(|e| format!("HTTP 客户端创建失败: {}", e))
@@ -86,7 +236,10 @@ async fn firebase_login(email: &str, password: &str) -> Result<String, String> {
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("Firebase 请求失败: {}", e))?;
+        .map_err(|e| {
+            let detailed = classify_network_error(&e, "identitytoolkit.googleapis.com");
+            format!("Firebase 请求失败: {}", detailed)
+        })?;
 
     let data: FirebaseResponse = resp
         .json()
@@ -101,43 +254,91 @@ async fn firebase_login(email: &str, password: &str) -> Result<String, String> {
     data.idToken.ok_or_else(|| "Firebase 未返回 idToken".to_string())
 }
 
-/// Auth1 登录获取 sessionToken
-async fn auth1_login(email: &str, password: &str) -> Result<String, String> {
-    let url = "https://windsurf.com/_devin-auth/password/login";
-    
+/// Auth1 登录结果
+struct Auth1Tokens {
+    session_token: String,
+    one_time_auth_token: String,
+}
+
+/// Auth1 登录（3 步：password login → PostAuth → GetOneTimeAuthToken）
+async fn auth1_login(email: &str, password: &str) -> Result<Auth1Tokens, String> {
     let client = create_http_client()?;
-    let body = serde_json::json!({
-        "email": email,
-        "password": password
-    });
-    
+
+    // Step 1: password login → 获取 auth1 token
     let resp = client
-        .post(url)
+        .post("https://windsurf.com/_devin-auth/password/login")
         .header("Content-Type", "application/json")
         .header("Referer", "https://windsurf.com/")
-        .json(&body)
+        .json(&serde_json::json!({ "email": email, "password": password }))
         .send()
         .await
-        .map_err(|e| format!("Auth1 请求失败: {}", e))?;
-    
+        .map_err(|e| {
+            let detailed = classify_network_error(&e, "windsurf.com");
+            format!("Auth1 Step1 请求失败: {}", detailed)
+        })?;
+
     #[derive(Deserialize)]
     #[allow(non_snake_case)]
-    struct Auth1Response {
-        sessionToken: Option<String>,
-        error: Option<FirebaseError>,
+    struct Auth1Step1Response {
+        token: Option<String>,
+        detail: Option<String>,
     }
-    
-    let data: Auth1Response = resp
+
+    let data: Auth1Step1Response = resp
         .json()
         .await
-        .map_err(|e| format!("Auth1 响应解析失败: {}", e))?;
-    
-    if let Some(err) = data.error {
-        let msg = err.message.unwrap_or_else(|| "未知错误".to_string());
-        return Err(format!("Auth1 登录失败: {}", msg));
+        .map_err(|e| format!("Auth1 Step1 响应解析失败: {}", e))?;
+
+    if let Some(detail) = data.detail {
+        return Err(format!("Auth1 登录失败: {}", detail));
     }
-    
-    data.sessionToken.ok_or_else(|| "Auth1 未返回 sessionToken".to_string())
+    let auth1_token = data.token.ok_or_else(|| "Auth1 未返回 token".to_string())?;
+    log::info!("[Auth1] Step1 登录成功");
+
+    // Step 2: PostAuth → 获取 sessionToken
+    let resp = client
+        .post("https://server.self-serve.windsurf.com/exa.seat_management_pb.SeatManagementService/WindsurfPostAuth")
+        .header("Content-Type", "application/json")
+        .header("Connect-Protocol-Version", "1")
+        .json(&serde_json::json!({ "auth1Token": auth1_token, "orgId": "" }))
+        .send()
+        .await
+        .map_err(|e| format!("Auth1 Step2 PostAuth 请求失败: {}", e))?;
+
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Auth1 Step2 响应解析失败: {}", e))?;
+
+    let session_token = data.get("sessionToken")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("Auth1 PostAuth 未返回 sessionToken: {}", data))?;
+    log::info!("[Auth1] Step2 PostAuth 成功");
+
+    // Step 3: GetOneTimeAuthToken → 获取 oneTimeAuthToken
+    let resp = client
+        .post("https://server.self-serve.windsurf.com/exa.seat_management_pb.SeatManagementService/GetOneTimeAuthToken")
+        .header("Content-Type", "application/json")
+        .header("Connect-Protocol-Version", "1")
+        .json(&serde_json::json!({ "authToken": session_token }))
+        .send()
+        .await
+        .map_err(|e| format!("Auth1 Step3 OTT 请求失败: {}", e))?;
+
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Auth1 Step3 响应解析失败: {}", e))?;
+
+    let ott = data.get("authToken")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("Auth1 OTT 未返回 authToken: {}", data))?;
+    log::info!("[Auth1] Step3 OTT 成功");
+
+    Ok(Auth1Tokens {
+        session_token: session_token.to_string(),
+        one_time_auth_token: ott.to_string(),
+    })
 }
 
 /// 用 token 注册 Codeium 获取 apiKey
@@ -280,19 +481,31 @@ fn open_windsurf_uri(uri: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 登录结果：uri_token 用于 windsurf:// URI，codeium_token 用于 Codeium 注册
+struct LoginTokens {
+    uri_token: String,
+    codeium_token: String,
+}
+
 /// 统一登录：优先 Auth1，失败回退 Firebase
-async fn login_with_fallback(email: &str, password: &str) -> Result<String, String> {
+async fn login_with_fallback(email: &str, password: &str) -> Result<LoginTokens, String> {
     match auth1_login(email, password).await {
-        Ok(token) => {
+        Ok(tokens) => {
             log::info!("[登录] Auth1 成功");
-            Ok(token)
+            Ok(LoginTokens {
+                uri_token: tokens.session_token.clone(),
+                codeium_token: tokens.one_time_auth_token,
+            })
         }
         Err(auth1_err) => {
             log::warn!("[登录] Auth1 失败: {}，尝试 Firebase...", auth1_err);
             match firebase_login(email, password).await {
-                Ok(token) => {
+                Ok(id_token) => {
                     log::info!("[登录] Firebase 成功");
-                    Ok(token)
+                    Ok(LoginTokens {
+                        uri_token: id_token.clone(),
+                        codeium_token: id_token,
+                    })
                 }
                 Err(fb_err) => {
                     Err(format!("Auth1 和 Firebase 均失败: Auth1({}) Firebase({})", auth1_err, fb_err))
@@ -307,27 +520,33 @@ fn spawn_credits_refresh(pool: Arc<AccountPool>, email: String, token: String) {
     tokio::spawn(async move {
         log::info!("[后台] 尝试注册 Codeium 获取额度: {}", email);
 
-        if let Ok(api_key) = register_codeium(&token).await {
-            if let Ok(credits) = get_user_status(&api_key).await {
-                let _ = pool.update_account_credits(
-                    &email,
-                    Some(&api_key),
-                    Some(&credits.plan_name),
-                    Some(credits.daily_percent),
-                    Some(credits.weekly_percent),
-                );
+        match register_codeium(&token).await {
+            Ok(api_key) => {
+                match get_user_status(&api_key).await {
+                    Ok(credits) => {
+                        let _ = pool.update_account_credits(
+                            &email,
+                            Some(&api_key),
+                            Some(&credits.plan_name),
+                            Some(credits.daily_percent),
+                            Some(credits.weekly_percent),
+                        );
 
-                // 自动耗尽标记（<=0 视为耗尽）
-                let daily_exhausted = credits.daily_percent <= 0.0;
-                let weekly_exhausted = credits.weekly_percent <= 0.0;
-                let _ = pool.update_exhausted_flags(
-                    &email,
-                    Some(daily_exhausted),
-                    Some(weekly_exhausted),
-                );
-                log::info!("[后台] 额度更新成功: {} plan={} daily={:.0}% weekly={:.0}%",
-                    email, credits.plan_name, credits.daily_percent, credits.weekly_percent);
+                        // 自动耗尽标记（<=0 视为耗尽）
+                        let daily_exhausted = credits.daily_percent <= 0.0;
+                        let weekly_exhausted = credits.weekly_percent <= 0.0;
+                        let _ = pool.update_exhausted_flags(
+                            &email,
+                            Some(daily_exhausted),
+                            Some(weekly_exhausted),
+                        );
+                        log::info!("[后台] 额度更新成功: {} plan={} daily={:.0}% weekly={:.0}%",
+                            email, credits.plan_name, credits.daily_percent, credits.weekly_percent);
+                    }
+                    Err(e) => log::error!("[后台] 查询额度失败 {}: {}", email, e),
+                }
             }
+            Err(e) => log::error!("[后台] Codeium 注册失败 {}: {}", email, e),
         }
     });
 }
@@ -337,9 +556,9 @@ pub async fn switch_windsurf_account(state: State<'_, AppState>, email: String, 
     let pw = password.unwrap_or_else(|| email.clone());
     log::info!("[一键登录] 开始登录 {}", email);
 
-    let token = login_with_fallback(&email, &pw).await?;
+    let tokens = login_with_fallback(&email, &pw).await?;
 
-    let uri = format!("windsurf://codeium.windsurf/#access_token={}", urlencoding::encode(&token));
+    let uri = format!("windsurf://codeium.windsurf/#access_token={}", urlencoding::encode(&tokens.uri_token));
     open_windsurf_uri(&uri)?;
     log::info!("[一键登录] URI 已发送");
 
@@ -353,7 +572,7 @@ pub async fn switch_windsurf_account(state: State<'_, AppState>, email: String, 
     let _ = state.pool.mark_account_used(&email);
 
     // 后台刷新额度
-    spawn_credits_refresh(Arc::clone(&state.pool), email.clone(), token);
+    spawn_credits_refresh(Arc::clone(&state.pool), email.clone(), tokens.codeium_token);
 
     Ok(SwitchAccountResult {
         email: email.clone(),
@@ -376,9 +595,9 @@ pub async fn take_and_switch(state: State<'_, AppState>) -> Result<SwitchAccount
     let email = take_result.email;
     log::info!("[一键登录] 取用账号: {}", email);
 
-    let token = login_with_fallback(&email, &email).await?;
+    let tokens = login_with_fallback(&email, &email).await?;
 
-    let uri = format!("windsurf://codeium.windsurf/#access_token={}", urlencoding::encode(&token));
+    let uri = format!("windsurf://codeium.windsurf/#access_token={}", urlencoding::encode(&tokens.uri_token));
     open_windsurf_uri(&uri)?;
 
     // 记录当前登录账号
@@ -388,7 +607,7 @@ pub async fn take_and_switch(state: State<'_, AppState>) -> Result<SwitchAccount
     }
 
     // 后台刷新额度
-    spawn_credits_refresh(Arc::clone(&state.pool), email.clone(), token);
+    spawn_credits_refresh(Arc::clone(&state.pool), email.clone(), tokens.codeium_token);
 
     Ok(SwitchAccountResult {
         email: email.clone(),
