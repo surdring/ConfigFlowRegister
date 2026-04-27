@@ -116,7 +116,7 @@ npm run tauri dev
 # 构建
 npm run tauri build
 
-# 或使用 cargo tauri-cli  只打 DEB 包
+# 或使用 cargo tauri-cli 只打 DEB 包
 cargo tauri build --bundles deb 
 
 # 输出位置
