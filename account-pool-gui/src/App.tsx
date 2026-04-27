@@ -5,7 +5,7 @@ import { readTextFile } from '@tauri-apps/plugin-fs';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { Virtuoso } from 'react-virtuoso';
 import toast, { Toaster } from 'react-hot-toast';
-import type { Account, PoolStats, ResetInfo, TakeAccountResult, ImportResult, PageResult } from './types';
+import type { Account, PoolStats, ResetInfo, TakeAccountResult, ImportResult, PageResult, SwitchAccountResult } from './types';
 
 // 虚拟列表行高
 const ROW_HEIGHT = 32;
@@ -16,13 +16,16 @@ interface RowData {
   selectedEmails: Set<string>;
   toggleSelect: (email: string) => void;
   formatDate: (date: string | null) => string;
+  onSwitchAccount: (email: string) => void;
+  switchingEmail: string | null;
 }
 
 const TableRow = memo(({ index, data }: { index: number; data: RowData }) => {
-  const { accounts, selectedEmails, toggleSelect, formatDate } = data;
+  const { accounts, selectedEmails, toggleSelect, formatDate, onSwitchAccount, switchingEmail } = data;
   const account = accounts[index];
   if (!account) return null;
   const isEven = index % 2 === 0;
+  const isSwitching = switchingEmail === account.email;
 
   return (
     <div className={`flex h-8 border-b border-gray-100 hover:bg-[#5A4A8D]/5 transition-colors ${isEven ? 'bg-white' : 'bg-gray-50'}`}>
@@ -34,8 +37,8 @@ const TableRow = memo(({ index, data }: { index: number; data: RowData }) => {
           className="rounded border-gray-300 h-3 w-3"
         />
       </div>
-      <div className="px-2 w-[38%] text-xs font-medium text-gray-900 truncate flex items-center min-w-0">{account.email}</div>
-      <div className="px-2 w-[12%] flex items-center justify-center flex-shrink-0">
+      <div className="px-2 w-[32%] text-xs font-medium text-gray-900 truncate flex items-center min-w-0">{account.email}</div>
+      <div className="px-2 w-[10%] flex items-center justify-center flex-shrink-0">
         <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
           account.weekly_exhausted ? 'bg-[#E05656]/10 text-[#E05656]' :
           account.daily_exhausted ? 'bg-[#E6A23C]/10 text-[#E6A23C]' :
@@ -45,14 +48,27 @@ const TableRow = memo(({ index, data }: { index: number; data: RowData }) => {
            account.daily_exhausted ? '日耗尽' : '可用'}
         </span>
       </div>
-      <div className="px-2 w-[12%] text-xs text-gray-600 flex items-center justify-center flex-shrink-0">
+      <div className="px-2 w-[10%] text-xs text-gray-600 flex items-center justify-center flex-shrink-0">
         {account.daily_exhausted ? '✗' : '✓'}
       </div>
-      <div className="px-2 w-[12%] text-xs text-gray-600 flex items-center justify-center flex-shrink-0">
+      <div className="px-2 w-[10%] text-xs text-gray-600 flex items-center justify-center flex-shrink-0">
         {account.weekly_exhausted ? '✗' : '✓'}
       </div>
-      <div className="px-2 w-[12%] text-xs text-gray-600 flex items-center justify-center flex-shrink-0">{account.total_uses}</div>
-      <div className="px-2 w-[14%] text-xs text-gray-600 flex items-center justify-center flex-shrink-0">{formatDate(account.last_used_at)}</div>
+      <div className="px-2 w-[10%] text-xs text-gray-600 flex items-center justify-center flex-shrink-0">{account.total_uses}</div>
+      <div className="px-2 w-[12%] text-xs text-gray-600 flex items-center justify-center flex-shrink-0">{formatDate(account.last_used_at)}</div>
+      <div className="px-2 w-[16%] flex items-center justify-center flex-shrink-0">
+        <button
+          onClick={() => onSwitchAccount(account.email)}
+          disabled={isSwitching}
+          className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
+            isSwitching 
+              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+              : 'bg-[#5A4A8D]/10 text-[#5A4A8D] hover:bg-[#5A4A8D]/20 active:bg-[#5A4A8D]/30'
+          }`}
+        >
+          {isSwitching ? '登录中...' : '一键登录'}
+        </button>
+      </div>
     </div>
   );
 });
@@ -70,6 +86,8 @@ function App() {
   const [pageSize, setPageSize] = useState(20);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [switchingEmail, setSwitchingEmail] = useState<string | null>(null);
+  const [currentAccount, setCurrentAccount] = useState<string | null>(null);
 
   // 分页计算
   const totalPages = useMemo(() => Math.ceil(totalCount / pageSize), [totalCount, pageSize]);
@@ -79,7 +97,7 @@ function App() {
   // 服务端分页加载（带搜索/过滤）
   const loadData = useCallback(async () => {
     try {
-      const [pageData, statsData, resetData] = await Promise.all([
+      const [pageData, statsData, resetData, current] = await Promise.all([
         invoke<PageResult>('get_accounts_page', {
           page: currentPage,
           pageSize,
@@ -88,11 +106,13 @@ function App() {
         }),
         invoke<PoolStats>('get_stats'),
         invoke<ResetInfo>('get_reset_info'),
+        invoke<string | null>('get_current_account'),
       ]);
       setAccounts(pageData.accounts);
       setTotalCount(pageData.total);
       setStats(statsData);
       setResetInfo(resetData);
+      setCurrentAccount(current);
     } catch (error) {
       toast.error('加载数据失败: ' + error);
     }
@@ -126,6 +146,44 @@ function App() {
       await loadData();
     } catch (error) {
       toast.error('取用账号失败: ' + error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSwitchAccount = async (email: string) => {
+    setSwitchingEmail(email);
+    try {
+      const result = await invoke<SwitchAccountResult>('switch_windsurf_account', {
+        email,
+        password: null,
+      });
+      if (result.success) {
+        toast.success(result.message);
+        setCurrentAccount(email);
+      } else {
+        toast.error(result.message);
+      }
+    } catch (error) {
+      toast.error('一键登录失败: ' + error);
+    } finally {
+      setSwitchingEmail(null);
+    }
+  };
+
+  const handleTakeAndSwitch = async () => {
+    setIsLoading(true);
+    try {
+      const result = await invoke<SwitchAccountResult>('take_and_switch');
+      if (result.success) {
+        toast.success(result.message);
+        setCurrentAccount(result.email);
+      } else {
+        toast.error(result.message);
+      }
+      await loadData();
+    } catch (error) {
+      toast.error('取用并登录失败: ' + error);
     } finally {
       setIsLoading(false);
     }
@@ -263,6 +321,11 @@ function App() {
           <div className="flex items-center justify-between">
             <h1 className="text-2xl font-bold text-gray-900">账号池管理</h1>
             <div className="flex items-center gap-3">
+              {currentAccount && (
+                <span className="text-sm text-[#5A4A8D] font-medium bg-[#5A4A8D]/10 px-3 py-1 rounded-full">
+                  当前登录: {currentAccount}
+                </span>
+              )}
               <span className="text-sm text-gray-500">策略: Round Robin</span>
               <button
                 onClick={handleCheckReset}
@@ -326,6 +389,13 @@ function App() {
                 className="px-4 py-2 bg-[#5A4A8D] text-white rounded-lg hover:bg-[#6B5A9D] active:bg-[#4A3A7D] transition-colors disabled:opacity-50 disabled:bg-[#5A4A8D]/50 text-sm font-medium"
               >
                 {isLoading ? '加载中...' : '取用账号'}
+              </button>
+              <button
+                onClick={handleTakeAndSwitch}
+                disabled={isLoading}
+                className="px-4 py-2 bg-[#20B2AA] text-white rounded-lg hover:bg-[#0F766E] active:bg-[#0A5C57] transition-colors disabled:opacity-50 disabled:bg-[#20B2AA]/50 text-sm font-medium"
+              >
+                {isLoading ? '登录中...' : '一键登录'}
               </button>
               <button
                 onClick={() => setShowImportModal(true)}
@@ -420,12 +490,13 @@ function App() {
                 className="rounded border-gray-300"
               />
             </div>
-            <div className="px-2 py-2 w-[38%] text-xs font-medium text-gray-700 flex items-center min-w-0">邮箱</div>
-            <div className="px-2 py-2 w-[12%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">状态</div>
-            <div className="px-2 py-2 w-[12%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">日配额</div>
-            <div className="px-2 py-2 w-[12%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">周配额</div>
-            <div className="px-2 py-2 w-[12%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">累计使用</div>
-            <div className="px-2 py-2 w-[14%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">上次使用</div>
+            <div className="px-2 py-2 w-[32%] text-xs font-medium text-gray-700 flex items-center min-w-0">邮箱</div>
+            <div className="px-2 py-2 w-[10%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">状态</div>
+            <div className="px-2 py-2 w-[10%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">日配额</div>
+            <div className="px-2 py-2 w-[10%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">周配额</div>
+            <div className="px-2 py-2 w-[10%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">累计使用</div>
+            <div className="px-2 py-2 w-[12%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">上次使用</div>
+            <div className="px-2 py-2 w-[16%] text-xs font-medium text-gray-700 flex items-center justify-center flex-shrink-0">操作</div>
           </div>
 
           {/* Virtual List Body */}
@@ -442,6 +513,8 @@ function App() {
                       selectedEmails,
                       toggleSelect,
                       formatDate,
+                      onSwitchAccount: handleSwitchAccount,
+                      switchingEmail,
                     }}
                   />
                 )}

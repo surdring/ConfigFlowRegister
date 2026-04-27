@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
 pub mod models;
@@ -24,7 +24,7 @@ pub fn run() {
             
             let _ = pool.check_and_reset();
             
-            app.manage(AppState { pool });
+            app.manage(AppState { pool, current_account: Mutex::new(None) });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -32,6 +32,8 @@ pub fn run() {
             commands::get_accounts_page,
             commands::get_stats,
             commands::take_account,
+            commands::switch_windsurf_account,
+            commands::take_and_switch,
             commands::mark_daily_exhausted,
             commands::mark_weekly_exhausted,
             commands::unmark_exhausted,
@@ -44,6 +46,7 @@ pub fn run() {
             commands::import_from_json,
             commands::check_reset,
             commands::get_reset_info,
+            commands::get_current_account,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

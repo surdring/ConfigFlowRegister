@@ -37,3 +37,9 @@ export interface PageResult {
   accounts: Account[];
   total: number;
 }
+
+export interface SwitchAccountResult {
+  email: string;
+  message: string;
+  success: boolean;
+}

@@ -95,3 +95,10 @@ pub struct ImportResult {
     pub skipped: i32,
     pub errors: Vec<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwitchAccountResult {
+    pub email: String,
+    pub message: String,
+    pub success: bool,
+}
