@@ -185,8 +185,15 @@ fn classify_network_error(error: &reqwest::Error, host: &str) -> String {
     format!("{} (主机: {})", error, host)
 }
 
-/// 创建 HTTP 客户端（自动检测系统代理环境变量，代理不可达则直连）
-fn create_http_client() -> Result<reqwest::Client, String> {
+static HTTP_CLIENT: Mutex<Option<Result<reqwest::Client, String>>> = Mutex::new(None);
+
+/// 获取全局复用的 HTTP 客户端（首次创建时检测代理，后续直接复用连接池）
+fn get_http_client() -> Result<reqwest::Client, String> {
+    let mut guard = HTTP_CLIENT.lock().map_err(|_| "HTTP客户端锁错误".to_string())?;
+    if let Some(result) = guard.as_ref() {
+        return result.clone();
+    }
+
     let mut builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
         .no_proxy()
@@ -212,7 +219,10 @@ fn create_http_client() -> Result<reqwest::Client, String> {
         log::info!("[HTTP] 未检测到代理配置，使用直连");
     }
 
-    builder.build().map_err(|e| format!("HTTP 客户端创建失败: {}", e))
+    let client = builder.build().map_err(|e| format!("HTTP 客户端创建失败: {}", e));
+    let ret = client.clone();
+    *guard = Some(client);
+    ret
 }
 
 /// Firebase signInWithPassword 获取 ID token
@@ -222,7 +232,7 @@ async fn firebase_login(email: &str, password: &str) -> Result<String, String> {
         FIREBASE_API_KEY
     );
 
-    let client = create_http_client()?;
+    let client = get_http_client()?;
     let body = serde_json::json!({
         "email": email,
         "password": password,
@@ -262,7 +272,7 @@ struct Auth1Tokens {
 
 /// Auth1 登录（3 步：password login → PostAuth → GetOneTimeAuthToken）
 async fn auth1_login(email: &str, password: &str) -> Result<Auth1Tokens, String> {
-    let client = create_http_client()?;
+    let client = get_http_client()?;
 
     // Step 1: password login → 获取 auth1 token
     let resp = client
@@ -344,7 +354,7 @@ async fn auth1_login(email: &str, password: &str) -> Result<Auth1Tokens, String>
 /// 用 token 注册 Codeium 获取 apiKey
 async fn register_codeium(token: &str) -> Result<String, String> {
     let url = "https://api.codeium.com/register_user/";
-    let client = create_http_client()?;
+    let client = get_http_client()?;
     
     let resp = client
         .post(url)
@@ -374,7 +384,7 @@ async fn get_user_status(api_key: &str) -> Result<CreditInfo, String> {
         "server.self-serve.windsurf.com",
     ];
     
-    let client = create_http_client()?;
+    let client = get_http_client()?;
     let body = serde_json::json!({
         "metadata": {
             "apiKey": api_key,
