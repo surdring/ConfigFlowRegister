@@ -116,6 +116,9 @@ npm run tauri dev
 # 构建
 npm run tauri build
 
+# 或使用 cargo tauri-cli  只打 DEB 包
+cargo tauri build --bundles deb 
+
 # 输出位置
 # 可执行文件: target/release/account-pool-gui
 # DEB 包: target/release/bundle/deb/account-pool-gui_0.1.0_amd64.deb
